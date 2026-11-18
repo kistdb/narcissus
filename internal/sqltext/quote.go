@@ -46,3 +46,8 @@ func Fold(s string) string {
 		return r
 	}, s)
 }
+
+// QuoteString returns s as a SQL string literal.
+func QuoteString(s string) string {
+	return `'` + strings.ReplaceAll(s, `'`, `''`) + `'`
+}

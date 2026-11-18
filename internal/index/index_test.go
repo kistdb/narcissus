@@ -74,7 +74,8 @@ func TestEqual(t *testing.T) {
 		{`CREATE INDEX orders_x ON orders (status DESC) WHERE status <> 'done'`, false},
 		{`CREATE INDEX orders_x ON shipments (status) WHERE status <> 'done'`, false},
 		{`CREATE INDEX 'orders_x' ON 'orders' (status) WHERE status <> 'done'`, true},
-		{`CREATE INDEX orders_x ON orders ("status") WHERE status <> 'done'`, true},
+		{`CREATE INDEX orders_x ON orders ([status]) WHERE status <> 'done'`, true},
+		{`CREATE INDEX orders_x ON orders ("status") WHERE status <> 'done'`, false},
 	}
 	for _, tt := range tests {
 		ix, err := FromSQL(tt.sql)
@@ -116,7 +117,7 @@ CREATE INDEX b_z ON b (z);
 		return
 	}
 
-	changes, unmanaged := names(Diff(desired, actual, false))
+	changes, unmanaged := names(Diff(desired, actual, PruneNone))
 	if want := []string{"replace a_y", "create b_z"}; !reflect.DeepEqual(changes, want) {
 		t.Errorf("changes = %q, want %q", changes, want)
 	}
@@ -124,7 +125,7 @@ CREATE INDEX b_z ON b (z);
 		t.Errorf("unmanaged = %q, want %q", unmanaged, want)
 	}
 
-	changes, unmanaged = names(Diff(desired, actual, true))
+	changes, unmanaged = names(Diff(desired, actual, PruneAll))
 	if want := []string{"drop a_old", "drop b_old", "replace a_y", "create b_z"}; !reflect.DeepEqual(changes, want) {
 		t.Errorf("pruned changes = %q, want %q", changes, want)
 	}
@@ -132,7 +133,7 @@ CREATE INDEX b_z ON b (z);
 		t.Errorf("pruned unmanaged = %q, want none", unmanaged)
 	}
 
-	if p := Diff(desired, desired, true); !p.Empty() {
+	if p := Diff(desired, desired, PruneAll); !p.Empty() {
 		t.Errorf("Diff(desired, desired) = %+v, want empty", p)
 	}
 }
@@ -151,8 +152,43 @@ func TestNonASCIINames(t *testing.T) {
 
 func TestRaw(t *testing.T) {
 	raw := Raw("odd", "t", "CREATE INDEX odd ON t (a) -- something Parse can't read")
-	p := Diff(nil, []Index{raw}, true)
+	p := Diff(nil, []Index{raw}, PruneAll)
 	if len(p.Changes) != 1 || p.Changes[0].Action != Drop || p.Changes[0].Index.Name != "odd" {
 		t.Errorf("Diff() = %+v, want the raw index dropped", p)
+	}
+}
+
+func TestParseRejectsHiddenStatements(t *testing.T) {
+	_, err := Parse("indexes.sql", "CREATE INDEX i ON t (a) WHERE a > 0xE--'\n; DROP TABLE precious; --'\n;")
+	if err == nil || !strings.Contains(err.Error(), "want only CREATE INDEX") {
+		t.Errorf("Parse() = %v, want the DROP TABLE rejected", err)
+	}
+}
+
+func TestPruneNonUnique(t *testing.T) {
+	actual := mustParse(t, "CREATE UNIQUE INDEX u ON t (a); CREATE INDEX n ON t (b);")
+	p := Diff(nil, actual, PruneNonUnique)
+	if len(p.Changes) != 1 || p.Changes[0].Index.Name != "n" || len(p.Unmanaged) != 1 || p.Unmanaged[0].Name != "u" {
+		t.Errorf("Diff(PruneNonUnique) = %+v, want n dropped and u kept", p)
+	}
+}
+
+func TestAppDependent(t *testing.T) {
+	tests := map[string][]string{
+		"CREATE INDEX i ON t (a, b DESC)":                                   nil,
+		"CREATE INDEX i ON t (a COLLATE BINARY)":                            nil,
+		"CREATE INDEX i ON t (a) WHERE b IN (1, 2) AND CAST(c AS INT) > 0":  nil,
+		"CREATE INDEX i ON t (a COLLATE nocase)":                            {"COLLATE nocase"},
+		"CREATE INDEX i ON t (lower(email))":                                {"lower()"},
+		"CREATE INDEX i ON t (a) WHERE b LIKE 'x%' AND c = d COLLATE RTRIM": {"LIKE", "COLLATE RTRIM"},
+	}
+	for sql, want := range tests {
+		ix, err := FromSQL(sql)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := ix.AppDependent(); !reflect.DeepEqual(got, want) {
+			t.Errorf("AppDependent(%q) = %q, want %q", sql, got, want)
+		}
 	}
 }

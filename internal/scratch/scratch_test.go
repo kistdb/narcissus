@@ -1,6 +1,7 @@
 package scratch
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -182,5 +183,38 @@ func TestUpSection(t *testing.T) {
 		if got != tt.want || line != tt.line {
 			t.Errorf("upSection(%q) = %q, %d; want %q, %d", tt.text, got, line, tt.want, tt.line)
 		}
+	}
+}
+
+func TestBuildCantTouchFiles(t *testing.T) {
+	dir := t.TempDir()
+	prod := filepath.Join(dir, "prod.db")
+	c, err := sqlite3.Open(prod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Exec(`CREATE TABLE users (id); INSERT INTO users VALUES (1), (2)`); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	before, _ := os.ReadFile(prod)
+	newFile := filepath.Join(dir, "new.db")
+	for name, schema := range map[string]string{
+		"attach":      "CREATE TABLE t (a);\nATTACH 'file:" + prod + "?mode=rw' AS p;\nDELETE FROM p.users;",
+		"vacuum into": "CREATE TABLE t (a);\nVACUUM INTO '" + newFile + "';",
+	} {
+		d, err := Build(t.Context(), write(t, dir, "schema.sql", schema), write(t, dir, "indexes.sql", ""))
+		if err == nil {
+			d.Close()
+		}
+		if err == nil || !strings.Contains(err.Error(), "aren't allowed") {
+			t.Errorf("%s: Build() = %v, want a refusal", name, err)
+		}
+	}
+	if after, _ := os.ReadFile(prod); !bytes.Equal(before, after) {
+		t.Error("prod.db changed")
+	}
+	if _, err := os.Stat(newFile); err == nil {
+		t.Error("VACUUM INTO created a file")
 	}
 }

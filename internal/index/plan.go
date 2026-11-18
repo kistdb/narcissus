@@ -31,10 +31,12 @@ func (a Action) String() string {
 	}
 }
 
-// Change is one step of a plan. Index is the new definition, or for Drop the existing index.
+// Change is one step of a plan. Index is the new definition, or for Drop the
+// existing index; Old is the index a Replace drops.
 type Change struct {
 	Action Action
 	Index  Index
+	Old    Index
 }
 
 // Plan is the set of changes that brings a database's indexes in line with the desired ones.
@@ -46,9 +48,19 @@ type Plan struct {
 // Empty reports whether the plan changes nothing.
 func (p Plan) Empty() bool { return len(p.Changes) == 0 }
 
+// Prune says which undeclared indexes a plan drops.
+type Prune int
+
+// The prune modes. A UNIQUE index enforces a constraint, so it needs its own.
+const (
+	PruneNone      Prune = iota
+	PruneNonUnique       // drop undeclared indexes that aren't UNIQUE
+	PruneAll             // drop every undeclared index
+)
+
 // Diff plans the changes that turn the actual indexes into the desired ones,
-// matching them by name. Unmatched actual indexes are dropped only if prune is set.
-func Diff(desired, actual []Index, prune bool) Plan {
+// matching them by name. Unmatched actual indexes are dropped as prune says.
+func Diff(desired, actual []Index, prune Prune) Plan {
 	existing := make(map[string]Index, len(actual))
 	for _, ix := range actual {
 		existing[ix.key()] = ix
@@ -59,14 +71,14 @@ func Diff(desired, actual []Index, prune bool) Plan {
 		delete(existing, want.key())
 		switch {
 		case !ok:
-			p.Changes = append(p.Changes, Change{Create, want})
+			p.Changes = append(p.Changes, Change{Action: Create, Index: want})
 		case !have.Equal(want):
-			p.Changes = append(p.Changes, Change{Replace, want})
+			p.Changes = append(p.Changes, Change{Action: Replace, Index: want, Old: have})
 		}
 	}
 	for _, ix := range existing {
-		if prune {
-			p.Changes = append(p.Changes, Change{Drop, ix})
+		if prune == PruneAll || prune == PruneNonUnique && !ix.Unique {
+			p.Changes = append(p.Changes, Change{Action: Drop, Index: ix})
 		} else {
 			p.Unmanaged = append(p.Unmanaged, ix)
 		}

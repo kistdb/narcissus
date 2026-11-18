@@ -3,11 +3,8 @@
 package scratch
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
@@ -86,7 +83,10 @@ func loadSchema(ctx context.Context, c *sqlite3.Conn, path string) (isDB bool, e
 		}
 		return false, nil
 	}
-	isDB, err = isDatabase(path)
+	if !fi.Mode().IsRegular() {
+		return false, fmt.Errorf("%s is not a regular file or folder", path)
+	}
+	isDB, err = sqlite.IsDatabase(path)
 	if err != nil {
 		return false, err
 	}
@@ -100,26 +100,9 @@ func loadSchema(ctx context.Context, c *sqlite3.Conn, path string) (isDB bool, e
 	return false, sqlite.Script{File: path, Line: 1, Text: string(text)}.Run(c)
 }
 
-// isDatabase reports whether path starts with the SQLite file header.
-func isDatabase(path string) (bool, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer f.Close()
-	header := make([]byte, 16)
-	if _, err := io.ReadFull(f, header); err != nil {
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return false, nil
-		}
-		return false, err
-	}
-	return bytes.Equal(header, []byte("SQLite format 3\x00")), nil
-}
-
 // loadDatabase copies the schema, indexes included, of the database at path into c.
 func loadDatabase(ctx context.Context, c *sqlite3.Conn, path string) error {
-	src, err := sqlite.Open(ctx, path, false)
+	src, err := sqlite.Open(ctx, path, sqlite.Options{BusyTimeout: sqlite.DefaultBusyTimeout})
 	if err != nil {
 		return err
 	}
@@ -167,7 +150,7 @@ func dropIndexes(c *sqlite3.Conn, desired []index.Index) ([]string, error) {
 
 // copyStats copies the planner statistics of the database at path into c.
 func copyStats(ctx context.Context, c *sqlite3.Conn, path string) error {
-	src, err := sqlite.Open(ctx, path, false)
+	src, err := sqlite.Open(ctx, path, sqlite.Options{BusyTimeout: sqlite.DefaultBusyTimeout})
 	if err != nil {
 		return err
 	}

@@ -5,6 +5,7 @@ package index
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/kistdb/narcissus/internal/sqltext"
@@ -138,4 +139,28 @@ func parse(st sqltext.Statement) (Index, error) {
 	}
 	ix.canon = strings.Join(canon, " ")
 	return ix, nil
+}
+
+// AppDependent lists what makes the index's content depend on the app's
+// SQLite: collations other than BINARY, functions, and LIKE, GLOB, REGEXP or MATCH.
+// The column's own collation isn't in the statement; check it once the index exists.
+func (ix Index) AppDependent() []string {
+	toks, err := sqltext.Lex(ix.SQL)
+	if err != nil {
+		return nil
+	}
+	start := slices.IndexFunc(toks, func(t sqltext.Token) bool { return t.Text == "(" })
+	var deps []string
+	for i := max(start, 0); i < len(toks); i++ {
+		t := toks[i]
+		switch {
+		case t.Is("collate") && i+1 < len(toks) && sqltext.Fold(toks[i+1].Ident()) != "binary":
+			deps = append(deps, "COLLATE "+toks[i+1].Ident())
+		case t.Is("like") || t.Is("glob") || t.Is("regexp") || t.Is("match"):
+			deps = append(deps, strings.ToUpper(t.Text))
+		case t.Kind == sqltext.Word && !sqltext.IsKeyword(t.Text) && i+1 < len(toks) && toks[i+1].Text == "(":
+			deps = append(deps, t.Text+"()")
+		}
+	}
+	return deps
 }

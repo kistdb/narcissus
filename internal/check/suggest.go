@@ -52,9 +52,13 @@ func suggest(c *sqlite3.Conn, t target) (_ []string, err error) {
 	if err != nil {
 		return nil, err
 	}
+	trial, err := freeName(c, "narcissus_candidate")
+	if err != nil {
+		return nil, err
+	}
 	var out []string
 	for len(out) < maxSuggestions && cur > 0 {
-		best, err := search(c, t, read)
+		best, err := search(c, t, read, trial)
 		if err != nil {
 			return nil, err
 		}
@@ -90,7 +94,7 @@ func cost(c *sqlite3.Conn, t target) (int, error) {
 
 // search returns the cheapest candidate, growing the beamWidth cheapest of
 // each column count by one column, or nil if no candidate could be built.
-func search(c *sqlite3.Conn, t target, read map[string][]string) (*tried, error) {
+func search(c *sqlite3.Conn, t target, read map[string][]string, trial string) (*tried, error) {
 	var level []tried
 	for _, table := range slices.Sorted(maps.Keys(read)) {
 		for _, col := range read[table] {
@@ -101,7 +105,7 @@ func search(c *sqlite3.Conn, t target, read map[string][]string) (*tried, error)
 	for n := 1; n <= maxColumns && len(level) > 0; n++ {
 		kept := level[:0]
 		for _, cand := range level {
-			cost, ok, err := try(c, t, cand.candidate)
+			cost, ok, err := try(c, t, cand.candidate, trial)
 			if err != nil {
 				return nil, err
 			}
@@ -135,7 +139,7 @@ func grow(level []tried, read map[string][]string) []tried {
 
 // try costs the plan with the candidate index added, and reports false if
 // the index can't be built, as on a virtual table.
-func try(c *sqlite3.Conn, t target, cand candidate) (_ int, ok bool, err error) {
+func try(c *sqlite3.Conn, t target, cand candidate, name string) (_ int, ok bool, err error) {
 	if err := c.Exec(`SAVEPOINT narcissus_try`); err != nil {
 		return 0, false, err
 	}
@@ -144,7 +148,7 @@ func try(c *sqlite3.Conn, t target, cand candidate) (_ int, ok bool, err error) 
 			err = rerr
 		}
 	}()
-	if c.Exec(cand.sql("narcissus_candidate")) != nil {
+	if c.Exec(cand.sql(name)) != nil {
 		return 0, false, nil
 	}
 	n, err := cost(c, t)

@@ -16,6 +16,7 @@ CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INT, status TEXT, creat
 CREATE TABLE "order items" ("order" INT, sku TEXT);
 CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);
 CREATE TABLE users_email (x);
+CREATE TABLE narcissus_candidate (x);
 CREATE VIEW open_orders AS SELECT * FROM orders WHERE status = 'open' GROUP BY customer_id;
 `
 

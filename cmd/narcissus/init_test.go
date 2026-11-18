@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kistdb/narcissus/internal/index"
 )
 
 func TestInit(t *testing.T) {
@@ -71,5 +74,88 @@ CREATE VIEW big_orders AS SELECT * FROM orders WHERE total > 100;
 	}
 	if q, _ := os.ReadFile(filepath.Join(dir, "queries.sql")); !strings.HasPrefix(string(q), "SELECT") {
 		t.Errorf("init -force replaced queries.sql:\n%s", q)
+	}
+}
+
+func TestInitEdgeCases(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "app.db")
+	newDB(t, db, "CREATE TABLE t (a);\nCREATE VIEW v AS SELECT a FROM t -- the end\n;")
+	out := filepath.Join(dir, "out")
+	if err := os.Mkdir(out, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(t.Context(), []string{"init", "-dir", out, db}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(out, "queries.sql"), []byte("SELECT a FROM v;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"check", "-schema", filepath.Join(out, "schema.sql"), "-indexes", filepath.Join(out, "indexes.sql"), "-queries", filepath.Join(out, "queries.sql")}
+	var res bytes.Buffer
+	if err := run(t.Context(), args, &res, io.Discard); err != nil && !errors.Is(err, errFailed) {
+		t.Errorf("check on init's output: %v\n%s", err, res.String())
+	}
+
+	// A dangling symlink counts as an existing file.
+	sym := filepath.Join(dir, "sym")
+	if err := os.Mkdir(sym, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(dir, "outside.sql")
+	if err := os.Symlink(outside, filepath.Join(sym, "schema.sql")); err != nil {
+		t.Fatal(err)
+	}
+	err := run(t.Context(), []string{"init", "-dir", sym, db}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("init through a dangling symlink: %v, want a refusal", err)
+	}
+	if _, err := os.Stat(outside); err == nil {
+		t.Error("init wrote through the symlink")
+	}
+
+	for _, bad := range []string{"empty.db", "notes.db"} {
+		p := filepath.Join(dir, bad)
+		if err := os.WriteFile(p, []byte(strings.Repeat("x", len(bad)-7)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := run(t.Context(), []string{"init", "-dir", out, "-force", p}, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "not a SQLite database") {
+			t.Errorf("init %s: %v, want not a SQLite database", bad, err)
+		}
+	}
+}
+
+func TestInitStoredOddities(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "app.db")
+	newDB(t, db, "CREATE TABLE t (a, b);\nCREATE INDEX t_a ON t (a) /* by a")
+	out := filepath.Join(dir, "out")
+	if err := os.Mkdir(out, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(t.Context(), []string{"init", "-dir", out, db}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.ReadFile(filepath.Join(out, "indexes.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := index.Parse("indexes.sql", string(src)); err != nil {
+		t.Errorf("init wrote an indexes.sql that doesn't parse: %v\n%s", err, src)
+	}
+
+	if err := os.Remove(filepath.Join(out, "indexes.sql")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(out, "indexes.sql"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(filepath.Join(out, "schema.sql"))
+	err = run(t.Context(), []string{"init", "-dir", out, "-force", db}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "is a folder") {
+		t.Errorf("init -force with indexes.sql a folder: %v, want a refusal", err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(out, "schema.sql")); !bytes.Equal(before, after) {
+		t.Error("init replaced schema.sql before failing")
 	}
 }

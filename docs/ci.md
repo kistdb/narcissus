@@ -47,4 +47,4 @@ Run `apply` in the deploy step, after migrations:
 narcissus apply 'data/tenants/*.db'
 ```
 
-Each database changes in its own transaction. A failed one is reported, makes the exit status 1, and doesn't stop the rest. Building an index on a large table holds SQLite's write lock while it runs, so schedule big changes for quiet times.
+If your indexes use `COLLATE NOCASE`, `lower()` and the like, and your app uses SQLite's built-ins, add `-allow-collations-and-functions`; see [the README](../README.md#plan-and-apply). Each database changes in its own transaction. A failed one is reported, makes the exit status 1, and doesn't stop the rest. Building an index on a large table holds SQLite's write lock while it runs, so schedule big changes for quiet times.

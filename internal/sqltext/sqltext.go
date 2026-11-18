@@ -40,14 +40,16 @@ func (t Token) Ident() string {
 	}
 }
 
-// Canon returns the token as compared: names case-folded and quoted only
-// where needed, everything else as written.
+// Canon returns the token as compared: bare and bracketed names case-folded,
+// double-quoted text as written, since it may be a string literal.
 func (t Token) Canon() string {
-	switch t.Kind {
-	case Word:
+	switch {
+	case t.Kind == Word:
 		return Fold(t.Text)
-	case Quoted:
+	case t.Kind == Quoted && t.Text[0] != '"':
 		return Quote(Fold(t.Ident()))
+	case t.Kind == Quoted:
+		return `"` + strings.ReplaceAll(t.Ident(), `"`, `""`) + `"`
 	default:
 		return t.Text
 	}
@@ -70,6 +72,9 @@ func (e *Error) Unwrap() error { return e.Err }
 
 // Lex splits src into tokens, dropping white space and comments.
 func Lex(src string) ([]Token, error) {
+	if i := strings.IndexByte(src, 0); i >= 0 {
+		return nil, &Error{Line: LineAt(src, i), Err: errors.New("NUL byte in SQL")}
+	}
 	var toks []Token
 	for i := SkipSpace(src); i < len(src); i += SkipSpace(src[i:]) {
 		end, kind, err := scan(src, i)
@@ -141,11 +146,7 @@ func scan(s string, i int) (int, Kind, error) {
 		}
 		return i + n + 1, Quoted, nil
 	case isDigit(c) || c == '.' && i+1 < len(s) && isDigit(s[i+1]):
-		j := i + 1
-		for j < len(s) && (isIdent(s[j]) || s[j] == '.' || (s[j] == '+' || s[j] == '-') && (s[j-1] == 'e' || s[j-1] == 'E')) {
-			j++
-		}
-		return j, Number, nil
+		return number(s, i), Number, nil
 	case c == '?' || c == ':' || c == '@' || c == '$':
 		j := i + 1
 		for j < len(s) && isIdent(s[j]) {
@@ -167,6 +168,40 @@ func scan(s string, i int) (int, Kind, error) {
 	return i + 1, Punct, nil
 }
 
+// number returns the end of the numeric literal at s[i], scanned as SQLite
+// does: a sign belongs to it only after a decimal exponent marker and before a digit.
+func number(s string, i int) int {
+	digits := func(j int, ok func(byte) bool) int {
+		for j < len(s) && (ok(s[j]) || s[j] == '_') {
+			j++
+		}
+		return j
+	}
+	if strings.HasPrefix(s[i:], "0x") || strings.HasPrefix(s[i:], "0X") {
+		i = digits(i+2, isHex)
+	} else {
+		i = digits(i, isDigit)
+		if i < len(s) && s[i] == '.' {
+			i = digits(i+1, isDigit)
+		}
+		if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+			j := i + 1
+			if j < len(s) && (s[j] == '+' || s[j] == '-') {
+				j++
+			}
+			if j < len(s) && isDigit(s[j]) {
+				i = digits(j, isDigit)
+			}
+		}
+	}
+	for i < len(s) && isIdent(s[i]) { // SQLite rejects such a token; keep it whole
+		i++
+	}
+	return i
+}
+
+func isHex(c byte) bool { return isDigit(c) || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F' }
+
 // quoted returns the end of the quoted text at s[i], where a doubled quote
 // is an escaped one.
 func quoted(s string, i int, q byte) (int, error) {
@@ -183,7 +218,7 @@ func quoted(s string, i int, q byte) (int, error) {
 	return 0, fmt.Errorf("unterminated %c", q)
 }
 
-func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' }
+func isSpace(c byte) bool { return c == ' ' || '\t' <= c && c <= '\r' } // as SQLite: \t \n \v \f \r
 func isDigit(c byte) bool { return '0' <= c && c <= '9' }
 
 func isIdent(c byte) bool {

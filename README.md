@@ -87,8 +87,8 @@ For each failing query it suggests up to three indexes that fix it. It also warn
 ### plan and apply
 
 ```
-narcissus plan  [-indexes indexes.sql] [-prune] [-exit-code] [-jobs 4] [-busy-timeout 5s] DB...
-narcissus apply [-indexes indexes.sql] [-prune] [-jobs 4] [-busy-timeout 5s] DB...
+narcissus plan  [-indexes indexes.sql] [-prune [-prune-unique]] [-exit-code] [-jobs 4] [-busy-timeout 5s] DB...
+narcissus apply [-indexes indexes.sql] [-prune [-prune-unique]] [-allow-collations-and-functions] [-jobs 4] [-busy-timeout 5s] DB...
 ```
 
 `plan` shows the index changes each database needs to match `indexes.sql`, and `apply` makes them. Give one database, several, or a quoted glob:
@@ -103,9 +103,13 @@ tenants/globex.db: error: database is locked
 ```
 
 - **Matching:** indexes are matched by name. A changed definition is dropped and created again. Layout, comments, quoting and keyword case don't count as changes.
-- **Safety:** a database already in sync is only read. One that needs changes is changed in one transaction, so a failure leaves it as it was. One failed database doesn't stop the others.
-- **Pruning:** indexes not in `indexes.sql` are kept and listed, unless you pass `-prune`.
-- **Locking:** building an index on a large table holds SQLite's write lock until it's done, so writers wait.
+- **One transaction each:** a database already in sync is only read. One that needs changes is changed in one transaction, so a failure leaves it as it was. One failed database doesn't stop the others.
+- **Only index changes:** `apply` runs nothing but `CREATE INDEX` and `DROP INDEX`, one statement at a time, and SQLite's authorizer refuses anything else.
+- **Pruning:** indexes not in `indexes.sql` are kept and listed. `-prune` drops them, except UNIQUE ones, which enforce constraints: those also need `-prune-unique`, as does replacing a UNIQUE index with one that isn't. `-prune` is refused when `indexes.sql` declares no indexes.
+- **Collations and functions:** `apply` refuses an index whose content depends on how the app defines collations or functions, unless you pass `-allow-collations-and-functions`. That covers a collation other than BINARY (including one a column declares, such as `COLLATE NOCASE`, wherever the index reads that column), any function such as `lower()`, operators that call functions (`LIKE`, `GLOB`, `REGEXP`, `MATCH`, `->`, `->>`), and virtual generated columns. Narcissus builds indexes with SQLite's built-ins; if your app defines its own (ICU builds do), the index won't match what the app expects, and lookups go wrong. Pass the flag only if your app uses the built-ins.
+- **One name per database:** a database with more than one hard link is refused, because two names would let two writers in, and would read stale data. Paths and symlinks to the same file are handled once. Glob matches that aren't regular files are skipped with a warning, and a folder the glob can't read is an error.
+- **Locking:** building an index on a large table holds SQLite's write lock until it's done. Writers wait, and in rollback-journal mode readers wait too.
+- **Permissions:** the journal and WAL files `apply` creates get the database's permissions. Run Narcissus as the user that owns the databases.
 
 ### init
 
@@ -139,6 +143,8 @@ See [running Narcissus in CI](docs/ci.md). A GitHub Actions job that fails pull 
 ## Limits
 
 - **SQLite only.** Narcissus uses SQLite's own planner and parser on purpose.
+- **Platforms:** Linux, macOS and Windows. `apply` refuses to change databases on BSD and illumos for now, because file locking there may not match other SQLite programs. A release for those is being looked into.
+- **Files:** only regular files that start with the SQLite header are opened. Narcissus never creates a database.
 - **Virtual tables:** FTS5 and R*Tree are built in. FTS3 and FTS4 aren't, so `check` can't load a schema that uses them.
 - **Suggestions:** they use up to three plain columns. Expression and partial indexes are never suggested, though both are checked.
 - **Flags first:** flags go before database names, as in `narcissus apply -prune 'tenants/*.db'`.

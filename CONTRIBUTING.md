@@ -10,7 +10,10 @@ The dev shell is a Nix flake. With direnv, run `direnv allow`; without it, prefi
 just build   # bin/narcissus
 just test    # tests with the race detector
 just ci      # lint, tests, vulnerability and secret scans, build
+just test-linux  # the tests on Linux, through a Nix builder for aarch64-linux
 ```
+
+GitHub Actions runs the tests on Linux, macOS and Windows for every pull request once the repository is public.
 
 Run `just ci` before opening a pull request.
 

@@ -58,6 +58,24 @@
         }
       );
 
+      # The CLI, built without cgo. Its tests run as the check, so
+      # `nix build .#checks.aarch64-linux.test` tests it on Linux from a Mac.
+      packages = forAllSystems (pkgs: {
+        default = (pkgs.buildGoModule.override { go = goFor pkgs; }) {
+          pname = "narcissus";
+          version = self.shortRev or "dev";
+          src = self;
+          vendorHash = "sha256-7c3UPojUcKysE3q2UWc3lD1pscGVnNVbGTT+LoxnDVA=";
+          env.CGO_ENABLED = "0";
+          ldflags = [ "-X main.version=${self.shortRev or "dev"}" ];
+          doCheck = false;
+        };
+      });
+
+      checks = forAllSystems (pkgs: {
+        test = self.packages.${pkgs.stdenv.hostPlatform.system}.default.overrideAttrs { doCheck = true; };
+      });
+
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
     };
 }

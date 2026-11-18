@@ -121,3 +121,54 @@ func TestPlanExitCode(t *testing.T) {
 		t.Errorf("apply -exit-code: exit %d, want 2 (plan only)", code)
 	}
 }
+
+func TestPruneGuards(t *testing.T) {
+	dir := project(t, map[string]string{"empty.sql": "-- nothing yet\n", "one.sql": "CREATE INDEX i ON t (a);\n"})
+	db := filepath.Join(dir, "app.db")
+	newDB(t, db, "CREATE TABLE t (a, b); CREATE INDEX t_b ON t (b); CREATE UNIQUE INDEX t_u ON t (a, b);")
+
+	err := run(t.Context(), []string{"apply", "-prune", "-indexes", filepath.Join(dir, "empty.sql"), db}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "declares no indexes") {
+		t.Errorf("apply -prune with an empty indexes file: %v, want a refusal", err)
+	}
+	err = run(t.Context(), []string{"apply", "-prune-unique", "-indexes", filepath.Join(dir, "one.sql"), db}, io.Discard, io.Discard)
+	if code := exitCode(err, io.Discard); code != 2 {
+		t.Errorf("-prune-unique without -prune: exit %d, want 2", code)
+	}
+
+	var out bytes.Buffer
+	if err := run(t.Context(), []string{"apply", "-prune", "-indexes", filepath.Join(dir, "one.sql"), db}, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"  - DROP INDEX t_b\n", "  ! keeping t_u, which " + filepath.Join(dir, "one.sql") + " doesn't declare (it's UNIQUE: -prune -prune-unique drops it)\n"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output:\n%s\nwant it to contain:\n%s", out.String(), want)
+		}
+	}
+}
+
+func TestPlanFlagsAppDependent(t *testing.T) {
+	dir := project(t, map[string]string{"indexes.sql": "CREATE INDEX t_lower ON t (lower(a));\n"})
+	db := filepath.Join(dir, "app.db")
+	newDB(t, db, "CREATE TABLE t (a);")
+	var out bytes.Buffer
+	if err := run(t.Context(), []string{"plan", "-indexes", filepath.Join(dir, "indexes.sql"), db}, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "    ! uses lower(): apply needs -allow-collations-and-functions\n") {
+		t.Errorf("plan output:\n%s", out.String())
+	}
+}
+
+func TestOutputQuotesControlCharacters(t *testing.T) {
+	dir := project(t, map[string]string{"indexes.sql": "CREATE INDEX \"evil\n+ fake\" ON t (a);\n"})
+	db := filepath.Join(dir, "app.db")
+	newDB(t, db, "CREATE TABLE t (a);")
+	var out bytes.Buffer
+	if err := run(t.Context(), []string{"plan", "-indexes", filepath.Join(dir, "indexes.sql"), db}, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "\n+ fake") {
+		t.Errorf("a name with a newline forged an output line:\n%s", out.String())
+	}
+}

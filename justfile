@@ -31,3 +31,7 @@ security:
 # Build the binary to bin/narcissus.
 build:
     go build -trimpath -ldflags "-X main.version={{version}}" -o bin/narcissus ./cmd/narcissus
+
+# Run the tests on Linux, through a Nix builder for aarch64-linux.
+test-linux:
+    nix build .#checks.aarch64-linux.test --no-link -L

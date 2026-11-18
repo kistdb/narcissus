@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/kistdb/narcissus/internal/index"
 	"github.com/kistdb/narcissus/internal/sqlite"
+	"github.com/kistdb/narcissus/internal/sqltext"
 )
 
 const queriesStarter = `-- The queries narcissus check runs, each named in a comment. For example:
@@ -34,7 +36,7 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	}
 	db := flags.Arg(0)
 
-	c, err := sqlite.Open(ctx, db, false)
+	c, err := sqlite.Open(ctx, db, sqlite.Options{BusyTimeout: sqlite.DefaultBusyTimeout})
 	if err != nil {
 		return err
 	}
@@ -49,56 +51,111 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	}
 	slices.SortFunc(ixs, index.Compare)
 
-	header := "-- Written by narcissus init from " + filepath.Base(db) + ".\n\n"
+	header := "-- Written by narcissus init from " + clean(filepath.Base(db)) + ".\n\n"
 	var schema, indexes strings.Builder
 	schema.WriteString(header)
-	for _, o := range objs {
-		schema.WriteString(o.SQL + ";\n\n")
+	for i, o := range objs {
+		if i > 0 {
+			schema.WriteString("\n")
+		}
+		schema.WriteString(terminate(o.SQL))
 	}
 	indexes.WriteString(header)
 	for _, ix := range ixs {
-		indexes.WriteString(ix.SQL + ";\n")
+		indexes.WriteString(terminate(ix.SQL))
 	}
 
 	files := []struct {
 		name, content string
 		keep          bool // leave an existing file alone, even with -force
 	}{
-		{"schema.sql", strings.TrimRight(schema.String(), "\n") + "\n", false},
+		{"schema.sql", schema.String(), false},
 		{"indexes.sql", indexes.String(), false},
 		{"queries.sql", queriesStarter, true},
 	}
+	var writes []pendingWrite
 	for _, f := range files {
 		path := filepath.Join(*dir, f.name)
-		if _, err := os.Stat(path); err == nil && !*force && !f.keep {
-			return fmt.Errorf("%s already exists (-force overwrites it)", path)
-		}
-	}
-	for _, f := range files {
-		path := filepath.Join(*dir, f.name)
-		mode := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
-		if f.keep {
-			mode = os.O_WRONLY | os.O_CREATE | os.O_EXCL
-		}
-		switch err := writeFile(path, mode, f.content); {
-		case errors.Is(err, fs.ErrExist):
+		fi, err := os.Lstat(path) // a dangling symlink counts as existing
+		switch {
+		case err == nil && fi.IsDir():
+			return fmt.Errorf("%s is a folder", path)
+		case err == nil && f.keep:
 			fmt.Fprintf(stdout, "kept %s\n", path)
-		case err != nil:
+			continue
+		case err == nil && !*force:
+			return fmt.Errorf("%s already exists (-force overwrites it)", path)
+		case err != nil && !errors.Is(err, fs.ErrNotExist):
 			return err
-		default:
-			fmt.Fprintf(stdout, "wrote %s\n", path)
 		}
+		writes = append(writes, pendingWrite{path, f.content})
+	}
+	if err := writeAll(*dir, writes); err != nil {
+		return err
+	}
+	for _, w := range writes {
+		fmt.Fprintf(stdout, "wrote %s\n", w.path)
 	}
 	fmt.Fprintf(stdout, "%d tables, views and triggers; %d %s. Next: add your queries to queries.sql and run narcissus check.\n",
 		len(objs), len(ixs), plural(len(ixs), "index", "indexes"))
 	return nil
 }
 
-func writeFile(path string, flags int, content string) error {
-	f, err := os.OpenFile(path, flags, 0o644) //nolint:gosec // source files, readable like the rest of the repo
-	if err != nil {
-		return err
+// terminate ends a stored statement with a semicolon, after closing a
+// trailing comment SQLite let run to the end, or on its own line after a "--" one.
+func terminate(sql string) string {
+	toks, err := sqltext.Lex(sql)
+	switch {
+	case err != nil && strings.Contains(err.Error(), "unterminated comment"):
+		return sql + " */;\n"
+	case err == nil && len(toks) > 0 && strings.Contains(sql[toks[len(toks)-1].End:], "--"):
+		return sql + "\n;\n"
+	default:
+		return sql + ";\n"
 	}
-	_, err = f.WriteString(content)
-	return errors.Join(err, f.Close())
+}
+
+type pendingWrite struct{ path, content string }
+
+// writeAll writes every file to a temporary name in dir, then renames them
+// into place, so a failure leaves the old files untouched.
+func writeAll(dir string, writes []pendingWrite) (err error) {
+	var temps []string
+	defer func() {
+		for _, t := range temps {
+			if t != "" {
+				os.Remove(t)
+			}
+		}
+	}()
+	for _, w := range writes {
+		f, err := createTemp(dir)
+		if err != nil {
+			return err
+		}
+		temps = append(temps, f.Name())
+		_, err = f.WriteString(w.content)
+		if err := errors.Join(err, f.Close()); err != nil {
+			return err
+		}
+	}
+	for i, w := range writes {
+		if err := os.Rename(temps[i], w.path); err != nil {
+			return err
+		}
+		temps[i] = ""
+	}
+	return nil
+}
+
+// createTemp creates a new file in dir with the umask's permissions, as any
+// file you'd write yourself; os.CreateTemp would make it private.
+func createTemp(dir string) (*os.File, error) {
+	for {
+		name := filepath.Join(dir, ".narcissus-"+rand.Text()[:12]+".sql")
+		f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666) //nolint:gosec // source files, readable like the rest of the repo
+		if !errors.Is(err, fs.ErrExist) {
+			return f, err
+		}
+	}
 }

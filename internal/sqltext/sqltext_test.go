@@ -102,8 +102,8 @@ func TestCanon(t *testing.T) {
 		return strings.Join(parts, " ")
 	}
 	same := [][2]string{
-		{`Email DESC`, `"email" desc`},
-		{`[Order]`, `"order"`},
+		{`Email DESC`, `[email] desc`},
+		{`[Order]`, "`order`"},
 		{"`x`", `X`},
 	}
 	for _, p := range same {
@@ -115,6 +115,8 @@ func TestCanon(t *testing.T) {
 		{`a desc`, `"a desc"`},
 		{`"É"`, `"é"`},
 		{`'A'`, `'a'`},
+		{`"gone"`, `"GONE"`},
+		{`email`, `"email"`},
 	}
 	for _, p := range differ {
 		if canon(p[0]) == canon(p[1]) {
@@ -126,5 +128,32 @@ func TestCanon(t *testing.T) {
 func TestFold(t *testing.T) {
 	if got := Fold("ÉcoLE_Ä"); got != "École_Ä" {
 		t.Errorf("Fold() = %q, want ASCII letters only lowered", got)
+	}
+}
+
+func TestNumbers(t *testing.T) {
+	tests := map[string][]string{
+		"0xE--'\n; x": {"0xE", ";", "x"},
+		"1e-3 + 2":    {"1e-3", "+", "2"},
+		"1.5E+10":     {"1.5E+10"},
+		"2e--c\n3":    {"2e", "3"},
+		"1_000.5":     {"1_000.5"},
+		".5e2":        {".5e2"},
+	}
+	for src, want := range tests {
+		toks, err := Lex(src)
+		if err != nil {
+			t.Fatalf("Lex(%q): %v", src, err)
+		}
+		var got []string
+		for _, tok := range toks {
+			got = append(got, tok.Text)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("Lex(%q) = %q, want %q", src, got, want)
+		}
+	}
+	if _, err := Lex("SELECT 1\x00 WHERE 2"); err == nil || !strings.Contains(err.Error(), "NUL") {
+		t.Errorf("Lex with a NUL byte: %v, want an error", err)
 	}
 }

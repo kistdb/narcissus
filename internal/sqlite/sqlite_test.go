@@ -68,7 +68,7 @@ INSERT INTO users (email) VALUES ('a');
 		t.Fatal(err)
 	}
 
-	c, err = Open(t.Context(), path, false)
+	c, err = Open(t.Context(), path, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ INSERT INTO users (email) VALUES ('a');
 	if err := c.Exec(`CREATE TABLE x (a)`); err == nil {
 		t.Error("read-only connection allowed a write")
 	}
-	if _, err := Open(t.Context(), filepath.Join(t.TempDir(), "missing.db"), true); err == nil {
+	if _, err := Open(t.Context(), filepath.Join(t.TempDir(), "missing.db"), Options{Write: true}); err == nil {
 		t.Error("Open created a missing database")
 	}
 }
@@ -147,7 +147,7 @@ func TestOpenWALInReadOnlyFolder(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 
-	c, err = Open(t.Context(), path, false)
+	c, err = Open(t.Context(), path, Options{})
 	if err != nil {
 		t.Fatalf("Open() = %v", err)
 	}
@@ -155,7 +155,7 @@ func TestOpenWALInReadOnlyFolder(t *testing.T) {
 	if ixs, err := Indexes(c); err != nil || len(ixs) != 1 {
 		t.Errorf("Indexes() = %+v, %v; want t_a", ixs, err)
 	}
-	if _, err := Open(t.Context(), path, true); err == nil {
+	if _, err := Open(t.Context(), path, Options{Write: true}); err == nil {
 		t.Error("Open(write) succeeded in a read-only folder")
 	}
 }

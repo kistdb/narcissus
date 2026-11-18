@@ -12,6 +12,8 @@
 | A database file | Its tables, views and triggers are copied, never its rows. Its planner statistics (`sqlite_stat1`, `sqlite_stat4`) are copied too. |
 | A migrations folder | The `.sql` files run in version order. Plain files, golang-migrate `*.up.sql` files, and the up sections of dbmate (`-- migrate:up`) and goose (`-- +goose Up`) files all work. |
 
+`ATTACH` and `VACUUM INTO` are refused in a SQL file or migration, so `check` can't change any other file.
+
 Then every index the schema created is dropped, and the indexes in `indexes.sql` are created instead. `check` warns about each dropped index that `indexes.sql` doesn't declare, so nothing disappears silently.
 
 ## 2. Read each query's plan
@@ -61,4 +63,4 @@ If the snapshot uses WAL mode, SQLite creates empty `prod-snapshot.db-wal` and `
 *.db-shm
 ```
 
-In a read-only folder, where SQLite can't create those files, Narcissus opens the snapshot as immutable instead. That's safe there, since nothing can be writing to it.
+In a read-only folder, where SQLite can't create those files, Narcissus opens the snapshot as immutable instead, but only when there's no journal and no WAL content beside it, so nothing is missed. Otherwise it stops with an error. To make a single-file snapshot, use `sqlite3 app.db ".backup snapshot.db"`.
