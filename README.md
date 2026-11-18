@@ -19,6 +19,8 @@ queries.sql:5: recent_orders: temp-btree: USE TEMP B-TREE FOR ORDER BY
 
 > **Status:** early and unreleased. Install from source for now; release binaries for Linux, macOS and Windows will follow.
 
+> **Narcissus changes your databases.** It comes with no warranty: see [No warranty](#no-warranty). Keep backups, and run `plan` before `apply`.
+
 ## Install
 
 With Go 1.27 or later:
@@ -140,6 +142,16 @@ See [running Narcissus in CI](docs/ci.md). A GitHub Actions job that fails pull 
 - **Virtual tables:** FTS5 and R*Tree are built in. FTS3 and FTS4 aren't, so `check` can't load a schema that uses them.
 - **Suggestions:** they use up to three plain columns. Expression and partial indexes are never suggested, though both are checked.
 - **Flags first:** flags go before database names, as in `narcissus apply -prune 'tenants/*.db'`.
+
+## No warranty
+
+Narcissus is provided "as is", without warranty of any kind, express or implied, as set out in its MIT and Apache-2.0 licenses. You use it at your own risk. In no event are the authors or copyright holders liable for any claim, damages or other liability, including loss of or damage to data, arising from the software or its use.
+
+`apply` drops and creates indexes in the databases you give it. Before you run it:
+
+- back up the databases, and check that the backups restore;
+- run `narcissus plan` on the same databases and read what it will change;
+- try it on a copy first.
 
 ## Contributing
 

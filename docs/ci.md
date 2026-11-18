@@ -39,6 +39,8 @@ narcissus plan -exit-code 'tenants/*.db'
 
 ## Apply on deploy
 
+`apply` changes your databases, with no warranty (see [No warranty](../README.md#no-warranty)). Back them up first, and run `plan` in the same job before it.
+
 Run `apply` in the deploy step, after migrations:
 
 ```sh

@@ -16,6 +16,8 @@ const usageText = `Usage:
   narcissus version                print the version
 
 Run a command with -h for its flags.
+
+apply changes databases. Narcissus comes with no warranty; keep backups.
 `
 
 // errFailed reports a failure the command has already described.

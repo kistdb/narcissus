@@ -11,4 +11,5 @@ All notable changes to Narcissus are listed here. The format follows [Keep a Cha
 - `plan -exit-code`: exits 3 when a database needs changes, for drift checks.
 - `init`: writes `schema.sql` and `indexes.sql` from an existing database.
 - Schema sources for `check`: a SQL file, a database file with its planner statistics, or a migrations folder (plain, golang-migrate, dbmate, goose).
+- A no-warranty notice in the README and the command's usage text.
 - WAL databases in read-only folders open read-only, as immutable, for `check`, `plan` and `init`.
