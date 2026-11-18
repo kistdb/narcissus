@@ -1,0 +1,123 @@
+package main
+
+import (
+	"bytes"
+	"io"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/ncruces/go-sqlite3"
+)
+
+func newDB(t *testing.T, path, sql string) {
+	t.Helper()
+	c, err := sqlite3.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.Exec(sql); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPlanAndApply(t *testing.T) {
+	dir := project(t, map[string]string{
+		"indexes.sql": "CREATE INDEX orders_customer ON orders (customer_id);\n",
+	})
+	const tables = "CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INT);"
+	newDB(t, filepath.Join(dir, "a.db"), tables)
+	newDB(t, filepath.Join(dir, "b.db"), tables+"CREATE INDEX orders_customer ON orders (customer_id); CREATE INDEX legacy ON orders (id);")
+	newDB(t, filepath.Join(dir, "c.db"), "CREATE TABLE other (x);")
+	indexes := filepath.Join(dir, "indexes.sql")
+	glob := filepath.Join(dir, "*.db")
+	a, b, c := filepath.Join(dir, "a.db"), filepath.Join(dir, "b.db"), filepath.Join(dir, "c.db")
+
+	var out bytes.Buffer
+	err := run(t.Context(), []string{"plan", "-indexes", indexes, glob}, &out, io.Discard)
+	if err != nil {
+		t.Fatalf("plan: %v\n%s", err, out.String())
+	}
+	want := a + "\n  + CREATE INDEX orders_customer ON orders (customer_id)\n" +
+		b + "\n  ! keeping legacy, which " + indexes + " doesn't declare (-prune drops it)\n" +
+		c + "\n  + CREATE INDEX orders_customer ON orders (customer_id)\n" +
+		"3 databases: 2 to change, 1 in sync, 0 failed.\n"
+	if out.String() != want {
+		t.Errorf("plan output:\n%s\nwant:\n%s", out.String(), want)
+	}
+
+	out.Reset()
+	err = run(t.Context(), []string{"apply", "-indexes", indexes, "-prune", "-jobs", "2", glob}, &out, io.Discard)
+	if code := exitCode(err, io.Discard); code != 1 {
+		t.Errorf("apply exit code %d, want 1 for c.db", code)
+	}
+	for _, line := range []string{
+		b + "\n  - DROP INDEX legacy\n",
+		c + ": error: orders_customer: ",
+		"3 databases: 2 changed, 0 in sync, 1 failed.\n",
+	} {
+		if !strings.Contains(out.String(), line) {
+			t.Errorf("apply output:\n%s\nwant it to contain:\n%s", out.String(), line)
+		}
+	}
+
+	out.Reset()
+	if err := run(t.Context(), []string{"plan", "-indexes", indexes, "-prune", a, b}, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "2 databases: 0 to change, 2 in sync, 0 failed.\n" {
+		t.Errorf("plan after apply:\n%s", out.String())
+	}
+}
+
+func TestSyncErrors(t *testing.T) {
+	dir := project(t, map[string]string{"indexes.sql": "CREATE INDEX i ON t (a);\n", "bad.sql": "DROP TABLE t;\n"})
+	tests := []struct {
+		name     string
+		args     []string
+		wantErr  string
+		wantCode int
+	}{
+		{"no databases", []string{"apply", "-indexes", filepath.Join(dir, "indexes.sql")}, "apply: no databases given", 2},
+		{"bad jobs", []string{"plan", "-jobs", "0", "x.db"}, "-jobs must be at least 1", 2},
+		{"no match", []string{"plan", "-indexes", filepath.Join(dir, "indexes.sql"), filepath.Join(dir, "*.db")}, "no databases match", 1},
+		{"bad indexes", []string{"plan", "-indexes", filepath.Join(dir, "bad.sql"), "x.db"}, "bad.sql:1: want only CREATE INDEX", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := run(t.Context(), tt.args, io.Discard, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("run() error = %v, want %q", err, tt.wantErr)
+			}
+			if code := exitCode(err, io.Discard); code != tt.wantCode {
+				t.Errorf("exit code %d, want %d", code, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestPlanExitCode(t *testing.T) {
+	dir := project(t, map[string]string{"indexes.sql": "CREATE INDEX orders_customer ON orders (customer_id);\n"})
+	db := filepath.Join(dir, "app.db")
+	newDB(t, db, "CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INT);")
+	indexes := filepath.Join(dir, "indexes.sql")
+
+	err := run(t.Context(), []string{"plan", "-exit-code", "-indexes", indexes, db}, io.Discard, io.Discard)
+	if code := exitCode(err, io.Discard); code != 3 {
+		t.Errorf("plan -exit-code with changes pending: exit %d, want 3", code)
+	}
+	if err := run(t.Context(), []string{"plan", "-indexes", indexes, db}, io.Discard, io.Discard); err != nil {
+		t.Errorf("plan without -exit-code: %v, want success", err)
+	}
+	if err := run(t.Context(), []string{"apply", "-indexes", indexes, db}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(t.Context(), []string{"plan", "-exit-code", "-indexes", indexes, db}, io.Discard, io.Discard); err != nil {
+		t.Errorf("plan -exit-code in sync: %v, want success", err)
+	}
+	err = run(t.Context(), []string{"apply", "-exit-code", db}, io.Discard, io.Discard)
+	if code := exitCode(err, io.Discard); code != 2 {
+		t.Errorf("apply -exit-code: exit %d, want 2 (plan only)", code)
+	}
+}

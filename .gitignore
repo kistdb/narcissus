@@ -1,0 +1,6 @@
+/bin/
+/.direnv/
+/result
+*.test
+*.out
+/cmd/narcissus/narcissus
