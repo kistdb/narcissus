@@ -485,3 +485,52 @@ func FreeName(c *sqlite3.Conn, base string) (string, error) {
 	}
 	return name, err
 }
+
+// BindColumn binds column col of row to param of st; values can't cross connections.
+func BindColumn(st *sqlite3.Stmt, param int, row *sqlite3.Stmt, col int) error {
+	switch row.ColumnType(col) {
+	case sqlite3.INTEGER:
+		return st.BindInt64(param, row.ColumnInt64(col))
+	case sqlite3.FLOAT:
+		return st.BindFloat(param, row.ColumnFloat(col))
+	case sqlite3.TEXT:
+		return st.BindText(param, row.ColumnText(col))
+	case sqlite3.BLOB:
+		if b := row.ColumnBlob(col, nil); len(b) > 0 {
+			return st.BindBlob(param, b)
+		}
+		return st.BindZeroBlob(param, 0) // an empty BLOB, which a nil slice would make NULL
+	default:
+		return st.BindNull(param)
+	}
+}
+
+// Create creates a new, empty database file at path with the given
+// permissions, failing if anything is there. It allows double-quoted strings,
+// as a copied schema may use them.
+func Create(ctx context.Context, path string, mode fs.FileMode) (_ *sqlite3.Conn, err error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			os.Remove(path)
+		}
+	}()
+	if err := errors.Join(f.Chmod(mode), f.Close()); err != nil {
+		return nil, err
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	c, err := open(ctx, uri(abs, url.Values{"_pragma": {"busy_timeout(5000)"}}), sqlite3.OPEN_URI|sqlite3.OPEN_READWRITE, DefaultBusyTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := AllowDoubleQuotedStrings(c, true); err != nil {
+		return nil, errors.Join(err, c.Close())
+	}
+	return c, nil
+}

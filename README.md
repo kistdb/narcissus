@@ -155,12 +155,21 @@ narcissus init [-dir .] [-force] DB
 
 `init` writes `schema.sql` and `indexes.sql` from a database, plus a starter `queries.sql`. It won't overwrite files that are already there unless you add `-force`, and it never replaces `queries.sql`.
 
+### collations and convert
+
+```
+narcissus collations [-format text|json] DB...
+narcissus convert [-to nocase] [-map NAME=collation,...] [-queries queries.sql] [-write] DB NEW
+```
+
+A database whose app used its own collation, such as Android's `LOCALIZED`, can't be sorted or compared by any other SQLite program. `collations` lists those collations, and `convert` writes a copy that uses SQLite's built-in ones, after checking that no rows would collide. It's a dry run unless you add `-write`, and it never changes the original. See [Collations other programs don't have](docs/collations.md).
+
 ### Exit status
 
 | Status | Meaning |
 |---|---|
 | 0 | All went well. |
-| 1 | `check` found a problem, a database couldn't be changed, or something else went wrong. |
+| 1 | `check` found a problem, `collations` found other collations, a database couldn't be changed or converted, or something else went wrong. |
 | 2 | Something on the command line needs a look. |
 | 3 | `plan -exit-code`: at least one database needs changes. |
 

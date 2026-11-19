@@ -186,10 +186,12 @@ func writeJSON(w io.Writer, rep *check.Report, schema string, ignored []string) 
 }
 
 var synopses = map[string]string{
-	"check": "narcissus check [flags]",
-	"plan":  "narcissus plan [flags] DB...",
-	"apply": "narcissus apply [flags] DB...",
-	"init":  "narcissus init [flags] DB",
+	"check":      "narcissus check [flags]",
+	"plan":       "narcissus plan [flags] DB...",
+	"apply":      "narcissus apply [flags] DB...",
+	"init":       "narcissus init [flags] DB",
+	"collations": "narcissus collations [flags] DB...",
+	"convert":    "narcissus convert [flags] DB NEW",
 }
 
 func newFlagSet(name string, stderr io.Writer) *flag.FlagSet {
@@ -220,6 +222,8 @@ func parse(flags *flag.FlagSet, args []string, nargs int) error {
 		return usageError{err: fmt.Errorf("%s: please give one or more databases", flags.Name())}
 	case nargs == 1 && flags.NArg() != 1:
 		return usageError{err: fmt.Errorf("%s: please give one database", flags.Name())}
+	case nargs == 2 && flags.NArg() != 2:
+		return usageError{err: fmt.Errorf("%s: please give the database, then the new file to write", flags.Name())}
 	case nargs == 0 && flags.NArg() != 0:
 		return usageError{err: fmt.Errorf("%s: doesn't take a database; use -schema", flags.Name())}
 	}

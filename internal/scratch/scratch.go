@@ -211,26 +211,10 @@ func copyTable(src, dst *sqlite3.Conn, table string) error {
 			}
 		}
 		for i := range row.ColumnCount() {
-			if err := bindColumn(ins, i+1, row, i); err != nil {
+			if err := sqlite.BindColumn(ins, i+1, row, i); err != nil {
 				return err
 			}
 		}
 		return ins.Exec()
 	})
-}
-
-// bindColumn binds column col of row to param of st; values can't cross connections.
-func bindColumn(st *sqlite3.Stmt, param int, row *sqlite3.Stmt, col int) error {
-	switch row.ColumnType(col) {
-	case sqlite3.INTEGER:
-		return st.BindInt64(param, row.ColumnInt64(col))
-	case sqlite3.FLOAT:
-		return st.BindFloat(param, row.ColumnFloat(col))
-	case sqlite3.TEXT:
-		return st.BindText(param, row.ColumnText(col))
-	case sqlite3.BLOB:
-		return st.BindBlob(param, row.ColumnBlob(col, nil))
-	default:
-		return st.BindNull(param)
-	}
 }

@@ -12,6 +12,7 @@ All notable changes to Narcissus are listed here. The format follows [Keep a Cha
 - `init` writes `schema.sql`, `indexes.sql` and a starter `queries.sql` from an existing database.
 - `check` reads its schema from a SQL file, a database file (with its statistics) or a migrations folder: plain, golang-migrate, dbmate, goose, sql-migrate or Prisma.
 - `-- narcissus: allow unused` above an index keeps `check` from reporting it as unused; indexes that support a foreign key are never reported.
+- `collations` lists collations other SQLite programs don't have, such as Android's `LOCALIZED`, and NOCASE indexes an app built with its own NOCASE. `convert` writes a copy of a database using built-in collations instead: a dry run unless `-write` is given, refusing when rows would collide or foreign keys would break, copying one consistent moment, and keeping rows, rowids and settings exactly; the copy is compared value by value with the original and must pass `integrity_check`.
 - `narcissus version` shows the version of SQLite built in.
 - A no-warranty notice in the README and the usage text.
 
