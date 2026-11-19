@@ -5,7 +5,6 @@ package index
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/kistdb/narcissus/internal/sqltext"
@@ -19,7 +18,9 @@ type Index struct {
 	SQL    string // the statement, compacted to one line
 	File   string // its file; empty when read from a database
 	Line   int
-	canon  string
+	// AllowUnused is set by a "-- narcissus: allow unused" comment above it.
+	AllowUnused bool
+	canon       string
 }
 
 // Equal reports whether two indexes have the same definition, ignoring
@@ -46,6 +47,9 @@ func Parse(file, src string) ([]Index, error) {
 	var ixs []Index
 	for _, st := range stmts {
 		ix, err := parse(st)
+		if err == nil {
+			ix.AllowUnused, err = allowUnused(st.Comments)
+		}
 		if err != nil {
 			return nil, &sqltext.Error{File: file, Line: st.Line, Err: err}
 		}
@@ -141,26 +145,39 @@ func parse(st sqltext.Statement) (Index, error) {
 	return ix, nil
 }
 
-// AppDependent lists what makes the index's content depend on the app's
-// SQLite: collations other than BINARY, functions, and LIKE, GLOB, REGEXP or MATCH.
-// The column's own collation isn't in the statement; check it once the index exists.
-func (ix Index) AppDependent() []string {
+// allowUnused reads the "-- narcissus:" comments above an index.
+func allowUnused(comments []string) (bool, error) {
+	allow := false
+	for _, c := range comments {
+		key, value, ok := strings.Cut(c, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), "narcissus") {
+			continue
+		}
+		if !strings.EqualFold(strings.Join(strings.Fields(value), " "), "allow unused") {
+			return false, fmt.Errorf("unknown directive %q (want allow unused)", strings.TrimSpace(value))
+		}
+		allow = true
+	}
+	return allow, nil
+}
+
+// Renamed returns the statement creating the index under another name.
+func (ix Index) Renamed(name string) (string, error) {
 	toks, err := sqltext.Lex(ix.SQL)
 	if err != nil {
-		return nil
+		return "", err
 	}
-	start := slices.IndexFunc(toks, func(t sqltext.Token) bool { return t.Text == "(" })
-	var deps []string
-	for i := max(start, 0); i < len(toks); i++ {
-		t := toks[i]
-		switch {
-		case t.Is("collate") && i+1 < len(toks) && sqltext.Fold(toks[i+1].Ident()) != "binary":
-			deps = append(deps, "COLLATE "+toks[i+1].Ident())
-		case t.Is("like") || t.Is("glob") || t.Is("regexp") || t.Is("match"):
-			deps = append(deps, strings.ToUpper(t.Text))
-		case t.Kind == sqltext.Word && !sqltext.IsKeyword(t.Text) && i+1 < len(toks) && toks[i+1].Text == "(":
-			deps = append(deps, t.Text+"()")
+	i := 1 // after CREATE
+	for _, w := range []string{"unique", "index", "if", "not", "exists"} {
+		if i < len(toks) && toks[i].Is(w) {
+			i++
 		}
 	}
-	return deps
+	if i+1 < len(toks) && toks[i+1].Text == "." {
+		i += 2 // main.
+	}
+	if i >= len(toks) {
+		return "", fmt.Errorf("index %s: can't find its name", ix.Name)
+	}
+	return ix.SQL[:toks[i].Start] + sqltext.Quote(name) + ix.SQL[toks[i].End:], nil
 }

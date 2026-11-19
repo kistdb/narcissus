@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"path/filepath"
 	"strings"
@@ -36,13 +37,15 @@ func TestPlanAndApply(t *testing.T) {
 
 	var out bytes.Buffer
 	err := run(t.Context(), []string{"plan", "-indexes", indexes, glob}, &out, io.Discard)
-	if err != nil {
-		t.Fatalf("plan: %v\n%s", err, out.String())
+	if code := exitCode(err, io.Discard); code != 1 {
+		t.Errorf("plan exit code %d, want 1: c.db has no orders table", code)
 	}
 	want := a + "\n  + CREATE INDEX orders_customer ON orders (customer_id)\n" +
 		b + "\n  ! keeping legacy, which " + indexes + " doesn't declare (-prune drops it)\n" +
 		c + "\n  + CREATE INDEX orders_customer ON orders (customer_id)\n" +
-		"3 databases: 2 to change, 1 in sync, 0 failed.\n"
+		"  ! orders_customer: no such table: main.orders\n" +
+		"  Nothing was changed in this database.\n" +
+		"3 databases: 1 to change, 1 in sync, 1 failed.\n"
 	if out.String() != want {
 		t.Errorf("plan output:\n%s\nwant:\n%s", out.String(), want)
 	}
@@ -54,7 +57,7 @@ func TestPlanAndApply(t *testing.T) {
 	}
 	for _, line := range []string{
 		b + "\n  - DROP INDEX legacy\n",
-		c + ": error: orders_customer: ",
+		"  ! orders_customer: no such table: main.orders\n",
 		"3 databases: 2 changed, 0 in sync, 1 failed.\n",
 	} {
 		if !strings.Contains(out.String(), line) {
@@ -79,7 +82,7 @@ func TestSyncErrors(t *testing.T) {
 		wantErr  string
 		wantCode int
 	}{
-		{"no databases", []string{"apply", "-indexes", filepath.Join(dir, "indexes.sql")}, "apply: no databases given", 2},
+		{"no databases", []string{"apply", "-indexes", filepath.Join(dir, "indexes.sql")}, "apply: please give one or more databases", 2},
 		{"bad jobs", []string{"plan", "-jobs", "0", "x.db"}, "-jobs must be at least 1", 2},
 		{"no match", []string{"plan", "-indexes", filepath.Join(dir, "indexes.sql"), filepath.Join(dir, "*.db")}, "no databases match", 1},
 		{"bad indexes", []string{"plan", "-indexes", filepath.Join(dir, "bad.sql"), "x.db"}, "bad.sql:1: want only CREATE INDEX", 1},
@@ -128,7 +131,7 @@ func TestPruneGuards(t *testing.T) {
 	newDB(t, db, "CREATE TABLE t (a, b); CREATE INDEX t_b ON t (b); CREATE UNIQUE INDEX t_u ON t (a, b);")
 
 	err := run(t.Context(), []string{"apply", "-prune", "-indexes", filepath.Join(dir, "empty.sql"), db}, io.Discard, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "declares no indexes") {
+	if err == nil || !strings.Contains(err.Error(), "doesn't declare any indexes") {
 		t.Errorf("apply -prune with an empty indexes file: %v, want a refusal", err)
 	}
 	err = run(t.Context(), []string{"apply", "-prune-unique", "-indexes", filepath.Join(dir, "one.sql"), db}, io.Discard, io.Discard)
@@ -150,13 +153,18 @@ func TestPruneGuards(t *testing.T) {
 func TestPlanFlagsAppDependent(t *testing.T) {
 	dir := project(t, map[string]string{"indexes.sql": "CREATE INDEX t_lower ON t (lower(a));\n"})
 	db := filepath.Join(dir, "app.db")
-	newDB(t, db, "CREATE TABLE t (a);")
+	newDB(t, db, "CREATE TABLE t (a TEXT);")
 	var out bytes.Buffer
-	if err := run(t.Context(), []string{"plan", "-indexes", filepath.Join(dir, "indexes.sql"), db}, &out, io.Discard); err != nil {
-		t.Fatal(err)
+	err := run(t.Context(), []string{"plan", "-indexes", filepath.Join(dir, "indexes.sql"), db}, &out, io.Discard)
+	if code := exitCode(err, io.Discard); code != 1 {
+		t.Errorf("plan exit code %d, want 1", code)
 	}
-	if !strings.Contains(out.String(), "    ! uses lower(): apply needs -allow-collations-and-functions\n") {
+	if !strings.Contains(out.String(), "  ! t_lower: depends on lower(a)") || !strings.Contains(out.String(), "-allow-collations-and-functions") {
 		t.Errorf("plan output:\n%s", out.String())
+	}
+	out.Reset()
+	if err := run(t.Context(), []string{"plan", "-allow-collations-and-functions", "-indexes", filepath.Join(dir, "indexes.sql"), db}, &out, io.Discard); err != nil {
+		t.Errorf("plan with the flag: %v\n%s", err, out.String())
 	}
 }
 
@@ -170,5 +178,22 @@ func TestOutputQuotesControlCharacters(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "\n+ fake") {
 		t.Errorf("a name with a newline forged an output line:\n%s", out.String())
+	}
+}
+
+func TestFlagsAfterNamesAndInterruption(t *testing.T) {
+	dir := project(t, map[string]string{"indexes.sql": "CREATE INDEX i ON t (a);\n"})
+	db := filepath.Join(dir, "app.db")
+	newDB(t, db, "CREATE TABLE t (a);")
+	err := run(t.Context(), []string{"plan", "-indexes", filepath.Join(dir, "indexes.sql"), db, "-prune"}, io.Discard, io.Discard)
+	if code := exitCode(err, io.Discard); code != 2 || !strings.Contains(err.Error(), "flags go before") {
+		t.Errorf("flag after a name: exit %d, %v", code, err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	var out bytes.Buffer
+	err = run(ctx, []string{"apply", "-indexes", filepath.Join(dir, "indexes.sql"), db, db}, &out, io.Discard)
+	if exitCode(err, io.Discard) != 1 || strings.Contains(out.String(), "context canceled") && !strings.Contains(out.String(), "not started") {
+		t.Errorf("interrupted run: %v\n%s", err, out.String())
 	}
 }

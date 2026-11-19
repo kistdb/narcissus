@@ -13,18 +13,26 @@ func openNoBlock(path string) (*os.File, error) {
 }
 
 // matchShm gives a -shm file the database's permissions and, run as root, its
-// owner, as stock SQLite does; the library uses the umask instead.
+// owner, as stock SQLite does. It works through one handle, so a swap can't redirect it.
 func matchShm(abs string, db fs.FileInfo) {
-	shm := abs + "-shm"
-	fi, err := os.Lstat(shm)
+	f, err := openNoBlock(abs + "-shm")
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fi, err := f.Stat()
 	if err != nil || !fi.Mode().IsRegular() {
 		return
 	}
-	if fi.Mode().Perm() != db.Mode().Perm() {
-		_ = os.Chmod(shm, db.Mode().Perm())
+	have, ok1 := fi.Sys().(*syscall.Stat_t)
+	want, ok2 := db.Sys().(*syscall.Stat_t)
+	if !ok1 || !ok2 || have.Nlink != 1 {
+		return
 	}
-	st, ok := db.Sys().(*syscall.Stat_t)
-	if have, ok2 := fi.Sys().(*syscall.Stat_t); ok && ok2 && os.Geteuid() == 0 && (have.Uid != st.Uid || have.Gid != st.Gid) {
-		_ = os.Lchown(shm, int(st.Uid), int(st.Gid))
+	if fi.Mode().Perm() != db.Mode().Perm() {
+		_ = f.Chmod(db.Mode().Perm())
+	}
+	if os.Geteuid() == 0 && (have.Uid != want.Uid || have.Gid != want.Gid) {
+		_ = f.Chown(int(want.Uid), int(want.Gid))
 	}
 }

@@ -86,3 +86,24 @@ func (s Statement) SQL() string {
 	}
 	return b.String()
 }
+
+// SplitList splits the tokens after an opening parenthesis at their top-level
+// commas, returning the terms and the position of the closing parenthesis.
+func SplitList(toks []Token) (terms [][]Token, end int) {
+	depth, start := 0, 0
+	for i, t := range toks {
+		switch {
+		case t.Text == "(":
+			depth++
+		case t.Text == ")" && depth > 0:
+			depth--
+		case t.Text == ")" || t.Text == "," && depth == 0:
+			terms = append(terms, toks[start:i])
+			start = i + 1
+			if t.Text == ")" {
+				return terms, i
+			}
+		}
+	}
+	return append(terms, toks[start:]), len(toks)
+}

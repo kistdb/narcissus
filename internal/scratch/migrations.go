@@ -11,8 +11,8 @@ import (
 	"github.com/kistdb/narcissus/internal/sqlite"
 )
 
-// migrations returns the up migrations in dir in the order to run them:
-// plain .sql files, golang-migrate .up.sql files, and dbmate and goose up sections.
+// migrations returns the up migrations in dir in the order to run them: plain .sql
+// files, golang-migrate .up.sql files, up sections, and Prisma's folder/migration.sql.
 func migrations(dir string) ([]sqlite.Script, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -21,7 +21,12 @@ func migrations(dir string) ([]sqlite.Script, error) {
 	var names []string
 	for _, e := range entries {
 		n := e.Name()
-		if !e.IsDir() && strings.HasSuffix(n, ".sql") && !strings.HasSuffix(n, ".down.sql") {
+		switch {
+		case e.IsDir():
+			if _, err := os.Stat(filepath.Join(dir, n, "migration.sql")); err == nil {
+				names = append(names, filepath.Join(n, "migration.sql"))
+			}
+		case strings.HasSuffix(n, ".sql") && !strings.HasSuffix(n, ".down.sql"):
 			names = append(names, n)
 		}
 	}
@@ -70,9 +75,11 @@ func upSection(text string) (string, int) {
 	for i, l := range lines {
 		l = strings.TrimSpace(l)
 		switch {
-		case start < 0 && (l == "-- +goose Up" || l == "-- migrate:up" || strings.HasPrefix(l, "-- migrate:up ")):
+		case start < 0 && (l == "-- +goose Up" || l == "-- +migrate Up" || strings.HasPrefix(l, "-- +migrate Up ") ||
+			l == "-- migrate:up" || strings.HasPrefix(l, "-- migrate:up ")):
 			start = i + 1
-		case start >= 0 && (l == "-- +goose Down" || l == "-- migrate:down" || strings.HasPrefix(l, "-- migrate:down ")):
+		case start >= 0 && (l == "-- +goose Down" || l == "-- +migrate Down" || strings.HasPrefix(l, "-- +migrate Down ") ||
+			l == "-- migrate:down" || strings.HasPrefix(l, "-- migrate:down ")):
 			return strings.Join(lines[start:i], ""), start + 1
 		}
 	}

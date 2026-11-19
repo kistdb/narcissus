@@ -2,7 +2,6 @@ package check
 
 import (
 	"cmp"
-	"fmt"
 	"maps"
 	"regexp"
 	"slices"
@@ -18,6 +17,7 @@ const (
 	maxColumns     = 3 // per suggested index
 	maxSuggestions = 3 // per query
 	beamWidth      = 3 // candidates kept at each column count
+	maxPairColumns = 8 // columns per table tried in pairs
 )
 
 // candidate is an index to try: a table and its key columns.
@@ -52,7 +52,7 @@ func suggest(c *sqlite3.Conn, t target) (_ []string, err error) {
 	if err != nil {
 		return nil, err
 	}
-	trial, err := freeName(c, "narcissus_candidate")
+	trial, err := sqlite.FreeName(c, "narcissus_candidate")
 	if err != nil {
 		return nil, err
 	}
@@ -62,20 +62,65 @@ func suggest(c *sqlite3.Conn, t target) (_ []string, err error) {
 		if err != nil {
 			return nil, err
 		}
-		if best == nil || best.cost >= cur {
-			break
+		picks := []candidate{}
+		switch {
+		case best != nil && best.cost < cur:
+			picks, cur = append(picks, best.candidate), best.cost
+		case len(out)+2 <= maxSuggestions:
+			// No one index helps, as in a join that needs one on each side.
+			pair, n, err := searchPairs(c, t, read, trial)
+			if err != nil {
+				return nil, err
+			}
+			if pair == nil || n >= cur {
+				return out, nil
+			}
+			picks, cur = pair, n
+		default:
+			return out, nil
 		}
-		name, err := freeName(c, best.name())
-		if err != nil {
-			return nil, err
+		for _, p := range picks {
+			name, err := sqlite.FreeName(c, p.name())
+			if err != nil {
+				return nil, err
+			}
+			sql := p.sql(name)
+			if err := c.Exec(sql); err != nil {
+				return nil, err
+			}
+			out = append(out, sql+";")
 		}
-		sql := best.sql(name)
-		if err := c.Exec(sql); err != nil {
-			return nil, err
-		}
-		out, cur = append(out, sql+";"), best.cost
 	}
 	return out, nil
+}
+
+// searchPairs tries a one-column index on each of two tables together, and
+// returns the cheapest pair, or nil if none could be built.
+func searchPairs(c *sqlite3.Conn, t target, read map[string][]string, trial string) ([]candidate, int, error) {
+	tables := slices.Sorted(maps.Keys(read))
+	second, err := sqlite.FreeName(c, trial+"_2")
+	if err != nil {
+		return nil, 0, err
+	}
+	var best []candidate
+	bestCost := 0
+	for i, a := range tables {
+		for _, b := range tables[i+1:] {
+			for _, ca := range read[a][:min(len(read[a]), maxPairColumns)] {
+				for _, cb := range read[b][:min(len(read[b]), maxPairColumns)] {
+					pair := []candidate{{a, []string{ca}}, {b, []string{cb}}}
+					n, ok, err := tryAll(c, t, pair, []string{trial, second})
+					if err != nil {
+						return nil, 0, err
+					}
+					if ok && (best == nil || n < bestCost) {
+						best, bestCost = pair, n
+					}
+				}
+			}
+		}
+	}
+	return best, bestCost, nil
 }
 
 // cost is the number of problems in the query's plan, where reading all of
@@ -139,7 +184,12 @@ func grow(level []tried, read map[string][]string) []tried {
 
 // try costs the plan with the candidate index added, and reports false if
 // the index can't be built, as on a virtual table.
-func try(c *sqlite3.Conn, t target, cand candidate, name string) (_ int, ok bool, err error) {
+func try(c *sqlite3.Conn, t target, cand candidate, name string) (int, bool, error) {
+	return tryAll(c, t, []candidate{cand}, []string{name})
+}
+
+// tryAll costs the plan with all the candidates added, under the given names.
+func tryAll(c *sqlite3.Conn, t target, cands []candidate, names []string) (_ int, ok bool, err error) {
 	if err := c.Exec(`SAVEPOINT narcissus_try`); err != nil {
 		return 0, false, err
 	}
@@ -148,8 +198,10 @@ func try(c *sqlite3.Conn, t target, cand candidate, name string) (_ int, ok bool
 			err = rerr
 		}
 	}()
-	if c.Exec(cand.sql(name)) != nil {
-		return 0, false, nil
+	for i, cand := range cands {
+		if c.Exec(cand.sql(names[i])) != nil {
+			return 0, false, nil
+		}
 	}
 	n, err := cost(c, t)
 	return n, err == nil, err
@@ -178,20 +230,6 @@ func columnsRead(c *sqlite3.Conn, sql string) (_ map[string][]string, err error)
 		return nil, err
 	}
 	return read, st.Close()
-}
-
-// freeName returns base, or base with a number added, that no schema object has.
-func freeName(c *sqlite3.Conn, base string) (string, error) {
-	taken := make(map[string]bool)
-	err := sqlite.Query(c, `SELECT name FROM sqlite_schema`, func(st *sqlite3.Stmt) error {
-		taken[sqltext.Fold(st.ColumnText(0))] = true
-		return nil
-	})
-	name := base
-	for n := 2; taken[sqltext.Fold(name)]; n++ {
-		name = fmt.Sprintf("%s_%d", base, n)
-	}
-	return name, err
 }
 
 func (cand candidate) sql(name string) string {

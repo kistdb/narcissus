@@ -57,7 +57,7 @@ func (t Token) Canon() string {
 
 // Is reports whether the token is the keyword or bare identifier word.
 func (t Token) Is(word string) bool {
-	return t.Kind == Word && strings.EqualFold(t.Text, word)
+	return t.Kind == Word && Fold(t.Text) == Fold(word) // ASCII only, as SQLite
 }
 
 // Error is an error at a line of a SQL file.
@@ -69,6 +69,9 @@ type Error struct {
 
 func (e *Error) Error() string { return fmt.Sprintf("%s:%d: %v", e.File, e.Line, e.Err) }
 func (e *Error) Unwrap() error { return e.Err }
+
+// ErrUnterminatedComment is a /* comment that runs to the end of the text.
+var ErrUnterminatedComment = errors.New("unterminated comment")
 
 // Lex splits src into tokens, dropping white space and comments.
 func Lex(src string) ([]Token, error) {
@@ -129,7 +132,7 @@ func scan(s string, i int) (int, Kind, error) {
 	c := s[i]
 	switch {
 	case strings.HasPrefix(s[i:], "/*"):
-		return 0, 0, errors.New("unterminated comment")
+		return 0, 0, ErrUnterminatedComment
 	case c == '\'':
 		end, err := quoted(s, i, '\'')
 		return end, String, err

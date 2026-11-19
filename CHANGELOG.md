@@ -6,19 +6,22 @@ All notable changes to Narcissus are listed here. The format follows [Keep a Cha
 
 ### Added
 
-- `check`: fails queries whose plans read a table without an index, sort in a temporary b-tree or build an automatic index, and suggests indexes that fix them. Text, GitHub Actions and JSON output.
-- `plan` and `apply`: bring the indexes of one database, or of many matched by a glob, in line with `indexes.sql`, each database in one transaction.
-- `plan -exit-code`: exits 3 when a database needs changes, for drift checks.
-- `init`: writes `schema.sql` and `indexes.sql` from an existing database.
-- Schema sources for `check`: a SQL file, a database file with its planner statistics, or a migrations folder (plain, golang-migrate, dbmate, goose).
-- A no-warranty notice in the README and the command's usage text.
-- `apply` runs only `CREATE INDEX` and `DROP INDEX`, one statement at a time, under SQLite's authorizer.
-- `-prune` drops only non-UNIQUE indexes; `-prune-unique` drops UNIQUE ones too. `-prune` is refused when `indexes.sql` is empty.
-- `apply` refuses indexes that depend on collations, functions, function-backed operators or virtual generated columns an app can redefine, unless `-allow-collations-and-functions` is given. It checks what SQLite reports the index reads, before building it.
-- Replacing a UNIQUE index with one that isn't needs `-prune -prune-unique`.
-- Databases with more than one hard link are refused; each file is handled once however many paths lead to it. Glob matches that aren't regular files are reported, and unreadable folders are errors.
-- `check` refuses `ATTACH` and `VACUUM INTO` in schema sources.
-- After opening, Narcissus checks that the file SQLite opened is the one it checked, with one name, so a file swapped in between is refused; opening gives up on Ctrl-C or after the busy timeout and 30s, instead of hanging on a swapped-in FIFO.
-- Only regular files with the SQLite header are opened; journal and WAL files take the database's permissions; `-busy-timeout` applies from the first read.
-- WAL snapshots in read-only folders open as immutable when they have no journal or WAL content.
-- Changing databases is supported on Linux, macOS and Windows; BSD and illumos are refused for now.
+- `check` finds queries whose plans read a table without an index, sort in a temporary structure or build a temporary index, and suggests indexes that would help, including a pair of indexes for joins. Output as text, GitHub annotations or JSON.
+- `plan` and `apply` bring the indexes of one database, or of many matched by a glob, in line with `indexes.sql`.
+- `plan -exit-code` exits with status 3 when a database needs changes, for catching drift.
+- `init` writes `schema.sql`, `indexes.sql` and a starter `queries.sql` from an existing database.
+- `check` reads its schema from a SQL file, a database file (with its statistics) or a migrations folder: plain, golang-migrate, dbmate, goose, sql-migrate or Prisma.
+- `-- narcissus: allow unused` above an index keeps `check` from reporting it as unused; indexes that support a foreign key are never reported.
+- `narcissus version` shows the version of SQLite built in.
+- A no-warranty notice in the README and the usage text.
+
+### Safety
+
+- `apply` only ever creates and drops indexes, one statement at a time, and SQLite itself is set to refuse anything else.
+- Every change is checked before any is made, and `plan` runs the same checks. If any change in a database would be refused, nothing in it is changed.
+- Each database is changed in one transaction, so a failure or Ctrl-C leaves it as it was.
+- `apply` builds only indexes every SQLite computes the same way: columns, and a WHERE comparing columns with whole numbers, text or `NULL`; with `-allow-collations-and-functions`, also `NOCASE`, `RTRIM`, `lower()`, `upper()` and `trim()` of text columns. Anything else is declined with a note to create it from the app. Numeric columns holding text, unusual column defaults and UTF-16 text conversions are declined as well.
+- A double-quoted name in `indexes.sql` must be a real column; it's never read as text.
+- `-prune` keeps UNIQUE indexes unless `-prune-unique` is given, which replacing a UNIQUE index also needs, and won't run when `indexes.sql` is empty.
+- Narcissus opens only regular SQLite files with a single name, checks it still has the same file after SQLite opens it, and never creates a database. Journal and WAL files take the database's permissions. `check` can't write to any file, and `init` won't overwrite the database it reads.
+- Changing databases is supported on Linux, macOS and Windows; BSD and illumos are declined for now.

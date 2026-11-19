@@ -1,4 +1,4 @@
-//go:build unix
+//go:build linux || darwin || freebsd || netbsd || openbsd || dragonfly
 
 package sqlite
 
@@ -103,5 +103,52 @@ func TestOpenFileGivesUpOnFIFO(t *testing.T) {
 	// Unblock the abandoned open so the test leaves nothing behind.
 	if w, err := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
 		w.Close()
+	}
+}
+
+func TestMatchShmIgnoresSymlink(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "x.db")
+	newDB(t, db, `CREATE TABLE t (a)`)
+	victim := filepath.Join(dir, "victim.txt")
+	if err := os.WriteFile(victim, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, db+"-shm"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(db, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matchShm(db, fi)
+	if got, _ := os.Stat(victim); got.Mode().Perm() != 0o600 {
+		t.Errorf("victim mode %v, want 0600 untouched", got.Mode().Perm())
+	}
+}
+
+func TestReadOnlyWALMode(t *testing.T) {
+	old := syscall.Umask(0)
+	defer syscall.Umask(old)
+	path := filepath.Join(t.TempDir(), "app.db")
+	newDB(t, path, `PRAGMA journal_mode = WAL; CREATE TABLE t (a)`)
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Open(t.Context(), path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Indexes(c); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	for _, side := range []string{"-wal", "-shm"} {
+		if fi, err := os.Stat(path + side); err == nil && fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s mode %v, want the database's 0600", side, fi.Mode().Perm())
+		}
 	}
 }

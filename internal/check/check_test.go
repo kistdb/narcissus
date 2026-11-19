@@ -17,6 +17,8 @@ CREATE TABLE "order items" ("order" INT, sku TEXT);
 CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);
 CREATE TABLE users_email (x);
 CREATE TABLE narcissus_candidate (x);
+CREATE TABLE regions (id INTEGER PRIMARY KEY, country TEXT);
+CREATE TABLE shops (id INTEGER PRIMARY KEY, region_id INT, name TEXT);
 CREATE VIEW open_orders AS SELECT * FROM orders WHERE status = 'open' GROUP BY customer_id;
 `
 
@@ -119,6 +121,14 @@ SELECT id FROM users WHERE email = ?;
 SELECT email FROM users;
 -- name: by_sku
 SELECT * FROM "order items" WHERE sku = ?;
+-- name: left_join
+SELECT c.* FROM customers c LEFT JOIN orders o ON o.status = c.name;
+-- name: exists
+SELECT * FROM customers c WHERE EXISTS (SELECT 1 FROM orders o WHERE o.total = c.id);
+-- name: qualified
+SELECT * FROM main.orders WHERE created_at = ?;
+-- name: classic_join
+SELECT s.name FROM regions r JOIN shops s ON s.region_id = r.id WHERE r.country = ?;
 `)
 	if err != nil {
 		t.Fatal(err)
@@ -170,8 +180,15 @@ SELECT * FROM "order items" WHERE sku = ?;
 			Problems: []Rule{FullScan},
 			Suggest:  []string{"CREATE INDEX users_email_2 ON users (email);"},
 		},
-		"covering": {Problems: []Rule{FullScan}},
-		"by_sku":   {},
+		"covering":  {Problems: []Rule{FullScan}},
+		"by_sku":    {},
+		"left_join": {Problems: []Rule{FullScan}},
+		"exists":    {Problems: []Rule{FullScan}},
+		"qualified": {Problems: []Rule{FullScan}, Suggest: []string{"CREATE INDEX orders_created_at ON orders (created_at);"}},
+		"classic_join": {
+			Problems: []Rule{FullScan},
+			Suggest:  []string{"CREATE INDEX regions_country ON regions (country);", "CREATE INDEX shops_region_id ON shops (region_id);"},
+		},
 	}
 	if !reflect.DeepEqual(gots, want) {
 		t.Errorf("results:\n%+v\nwant\n%+v", gots, want)
@@ -186,7 +203,7 @@ SELECT * FROM "order items" WHERE sku = ?;
 			t.Errorf("unused index %s has no file", ix.Name)
 		}
 	}
-	if want := []string{"orders_total", "users_lower_email"}; !reflect.DeepEqual(unused, want) {
+	if want := []string{"users_lower_email"}; !reflect.DeepEqual(unused, want) {
 		t.Errorf("Unused = %q, want %q", unused, want)
 	}
 }
@@ -211,15 +228,19 @@ func TestSuggestLeavesDatabaseUnchanged(t *testing.T) {
 func TestAnalyze(t *testing.T) {
 	tg := target{
 		Query:   Query{Allow: []Rule{TempBTree}},
-		tables:  map[string]bool{"orders": true, "automatic_renewals": true},
-		aliases: map[string]string{"o": "orders"},
+		aliases: map[string]string{"o": "orders", "r": "recent"},
 	}
 	steps := []string{
 		"CO-ROUTINE (subquery-1)",
+		"MATERIALIZE recent",
 		"SCAN orders",
 		"SCAN O",
+		"SCAN o LEFT-JOIN",
+		"SCAN o EXISTS",
+		"SCAN main.orders",
 		"USE TEMP B-TREE FOR GROUP BY",
 		"SCAN (subquery-1)",
+		"SCAN r",
 		"SCAN CONSTANT ROW",
 		"SCAN 3-ROW VALUES CLAUSE",
 		"SCAN orders USING INDEX orders_created",
@@ -231,6 +252,9 @@ func TestAnalyze(t *testing.T) {
 	want := []Problem{
 		{FullScan, "SCAN orders"},
 		{FullScan, "SCAN O"},
+		{FullScan, "SCAN o LEFT-JOIN"},
+		{FullScan, "SCAN o EXISTS"},
+		{FullScan, "SCAN main.orders"},
 		{AutomaticIndex, "SEARCH c USING AUTOMATIC COVERING INDEX (id=?)"},
 	}
 	if !reflect.DeepEqual(ps, want) || indexScans != 1 {
@@ -252,5 +276,41 @@ func TestUsesIndex(t *testing.T) {
 		if got := usesIndex(tt.step, tt.name); got != tt.want {
 			t.Errorf("usesIndex(%q, %q) = %v, want %v", tt.step, tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestUnusedExemptions(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"schema.sql": `CREATE TABLE parent (id INTEGER PRIMARY KEY);
+			CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INT REFERENCES parent (id), note TEXT, tag TEXT);`,
+		"indexes.sql": `CREATE INDEX child_parent ON child (parent_id);
+-- Narcissus: allow unused
+CREATE INDEX child_note ON child (note);
+CREATE INDEX child_tag ON child (tag);`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := scratch.Build(t.Context(), filepath.Join(dir, "schema.sql"), filepath.Join(dir, "indexes.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	qs, err := ParseQueries("queries.sql", "-- NARCISSUS: Allow Full-Scan\nSELECT * FROM child;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Run(db, qs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Failed() {
+		t.Errorf("an allowed scan failed: %+v", rep.Results)
+	}
+	if len(rep.Unused) != 1 || rep.Unused[0].Name != "child_tag" {
+		t.Errorf("Unused = %+v, want only child_tag", rep.Unused)
 	}
 }

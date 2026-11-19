@@ -6,18 +6,24 @@ import (
 	"fmt"
 	"io"
 	"runtime/debug"
+
+	"github.com/ncruces/go-sqlite3"
+
+	"github.com/kistdb/narcissus/internal/sqlite"
 )
 
 const usageText = `Usage:
-  narcissus check [flags]          check that queries.sql uses indexes
-  narcissus plan [flags] DB...     show the index changes each database needs
-  narcissus apply [flags] DB...    make them; DB may be a glob, like 'tenants/*.db'
-  narcissus init [flags] DB        write schema.sql and indexes.sql from a database
+  narcissus check [flags]          check that the queries in queries.sql use indexes
+  narcissus plan  [flags] DB...    show the index changes each database needs
+  narcissus apply [flags] DB...    make those changes
+  narcissus init  [flags] DB       write schema.sql, indexes.sql and a starter queries.sql
   narcissus version                print the version
 
-Run a command with -h for its flags.
+DB is a database file or a quoted glob such as 'tenants/*.db'. Flags go before it.
+Run a command with -h to see its flags.
 
-apply changes databases. Narcissus comes with no warranty; keep backups.
+Only apply changes your databases. Please keep backups and run plan first;
+Narcissus comes with no warranty.
 `
 
 // errFailed reports a failure the command has already described.
@@ -48,8 +54,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return runInit(ctx, args[1:], stdout, stderr)
 	case "plan", "apply":
 		return runSync(ctx, cmd, args[1:], stdout, stderr)
-	case "version":
-		fmt.Fprintln(stdout, buildVersion())
+	case "version", "-version", "--version":
+		fmt.Fprintf(stdout, "narcissus %s (SQLite %s)\n", buildVersion(), sqliteVersion())
 		return nil
 	case "help", "-h", "-help", "--help":
 		fmt.Fprint(stdout, usageText)
@@ -69,4 +75,16 @@ func buildVersion() string {
 		return info.Main.Version
 	}
 	return "devel"
+}
+
+// sqliteVersion is the version of the SQLite built into Narcissus.
+func sqliteVersion() string {
+	c, err := sqlite.OpenMemory(context.Background())
+	if err != nil {
+		return "unknown"
+	}
+	defer c.Close()
+	v := "unknown"
+	_ = sqlite.Query(c, `SELECT sqlite_version()`, func(st *sqlite3.Stmt) error { v = st.ColumnText(0); return nil })
+	return v
 }

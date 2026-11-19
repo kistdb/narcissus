@@ -2,7 +2,6 @@
 package sqlite
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -45,8 +44,8 @@ type Options struct {
 	BusyTimeout time.Duration
 }
 
-// Open opens an existing SQLite database file with one name. It refuses
-// anything else, and writes on unsupported platforms.
+// Open opens an existing SQLite database file that has one name. For writing,
+// it also needs a supported platform. Its errors don't repeat the path.
 func Open(ctx context.Context, path string, opts Options) (*sqlite3.Conn, error) {
 	abs, err := filepath.Abs(path)
 	if err == nil {
@@ -56,19 +55,23 @@ func Open(ctx context.Context, path string, opts Options) (*sqlite3.Conn, error)
 		return nil, err
 	}
 	if len(abs) > maxPath {
-		return nil, fmt.Errorf("%s: path longer than %d bytes", path, maxPath)
+		return nil, fmt.Errorf("path longer than %d bytes", maxPath)
 	}
 	fi, err := checkFile(abs)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, err
 	}
-	if n, err := links(abs, fi); err != nil || n > 1 {
-		return nil, cmp.Or(err, fmt.Errorf("%s has %d hard links; narcissus won't use a database with more than one name", path, n))
+	n, err := links(abs, fi)
+	if err != nil {
+		return nil, err
+	}
+	if n > 1 {
+		return nil, fmt.Errorf("the file has %d names (hard links), and SQLite's journal follows the name, so it can't be used safely", n)
 	}
 	busy := min(opts.BusyTimeout, math.MaxInt32*time.Millisecond)
 	q := url.Values{
-		"modeof":  {abs},                                                  // journal and WAL get the database's permissions
 		"_pragma": {fmt.Sprintf("busy_timeout(%d)", busy.Milliseconds())}, // before the library's own setup reads the file
+		"modeof":  {abs},                                                  // a journal or WAL gets the database's permissions
 	}
 	flags := sqlite3.OPEN_URI | sqlite3.OPEN_READWRITE
 	if opts.Write {
@@ -89,10 +92,13 @@ func Open(ctx context.Context, path string, opts Options) (*sqlite3.Conn, error)
 		}
 	}
 	if err != nil {
+		if errors.Is(err, sqlite3.READONLY) && exists(abs+"-journal") {
+			err = fmt.Errorf("%w (an interrupted write left a journal; run apply, or open the database once with write access, to recover it)", err)
+		}
 		return nil, err
 	}
 	if err := verify(c, abs, fi, immutable); err != nil {
-		return nil, errors.Join(fmt.Errorf("%s: %w", path, err), c.Close())
+		return nil, errors.Join(err, c.Close())
 	}
 	matchShm(abs, fi)
 	return c, nil
@@ -141,11 +147,13 @@ func verify(c *sqlite3.Conn, abs string, want fs.FileInfo, immutable bool) error
 	}
 	type statter interface{ Stat() (fs.FileInfo, error) }
 	st, ok := f.(statter)
-	for u, wrapped := f.(vfs.FileUnwrap); !ok && wrapped; u, wrapped = u.Unwrap().(vfs.FileUnwrap) {
-		st, ok = u.Unwrap().(statter)
-	}
-	if !ok {
-		return errors.New("can't check the file SQLite opened")
+	for !ok { // the library may wrap the OS file
+		u, wrapped := f.(vfs.FileUnwrap)
+		if !wrapped {
+			return errors.New("can't check the file SQLite opened")
+		}
+		f = u.Unwrap()
+		st, ok = f.(statter)
 	}
 	fi, err := st.Stat()
 	if err != nil {
@@ -154,8 +162,12 @@ func verify(c *sqlite3.Conn, abs string, want fs.FileInfo, immutable bool) error
 	if !fi.Mode().IsRegular() || !os.SameFile(fi, want) {
 		return errors.New("the file changed while it was being opened")
 	}
-	if n, err := links(abs, fi); err != nil || n > 1 {
-		return cmp.Or(err, fmt.Errorf("the file gained %d hard links while it was being opened", n))
+	n, err := links(abs, fi)
+	if err != nil {
+		return err
+	}
+	if n > 1 {
+		return errors.New("the file gained a second name while it was being opened")
 	}
 	if immutable && !complete(abs) {
 		return errors.New("a journal or WAL appeared while the read-only snapshot was being opened")
@@ -166,8 +178,8 @@ func verify(c *sqlite3.Conn, abs string, want fs.FileInfo, immutable bool) error
 // maxPath keeps paths within what the SQLite library accepts.
 const maxPath = 900
 
-// open opens a connection that can't attach other files, with stock
-// SQLite's defaults: double-quoted strings allowed, foreign keys off.
+// open opens a connection that can't attach other files, with foreign keys off
+// as in stock SQLite; double-quoted strings are on only for in-memory databases.
 func open(ctx context.Context, name string, flags sqlite3.OpenFlag, busy time.Duration) (*sqlite3.Conn, error) {
 	c, err := sqlite3.OpenFlags(name, flags)
 	if err != nil {
@@ -185,16 +197,26 @@ func setup(ctx context.Context, c *sqlite3.Conn, flags sqlite3.OpenFlag, busy ti
 	}
 	c.SetInterrupt(ctx)
 	c.Limit(sqlite3.LIMIT_ATTACHED, 0) // no ATTACH or VACUUM INTO
-	for _, op := range []sqlite3.DBConfig{sqlite3.DBCONFIG_DQS_DDL, sqlite3.DBCONFIG_DQS_DML} {
-		if _, err := c.Config(op, true); err != nil {
-			return err
-		}
+	// A stale "column" must fail, not become a string, in what we run on a database file.
+	if err := AllowDoubleQuotedStrings(c, flags&sqlite3.OPEN_MEMORY != 0); err != nil {
+		return err
 	}
 	pragmas := `PRAGMA foreign_keys = OFF`
 	if flags&sqlite3.OPEN_READWRITE != 0 && flags&sqlite3.OPEN_MEMORY == 0 {
 		pragmas += `; PRAGMA synchronous = FULL`
 	}
 	return c.Exec(pragmas)
+}
+
+// AllowDoubleQuotedStrings sets whether "x" may mean a string when no column x
+// exists, as stock SQLite allows for the schemas and scripts it runs.
+func AllowDoubleQuotedStrings(c *sqlite3.Conn, on bool) error {
+	for _, op := range []sqlite3.DBConfig{sqlite3.DBCONFIG_DQS_DDL, sqlite3.DBCONFIG_DQS_DML} {
+		if _, err := c.Config(op, on); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // uri returns a file: URI for abs, as file:/dir/x.db or file:C:/dir/x.db.
@@ -243,10 +265,15 @@ func checkFile(path string) (fs.FileInfo, error) {
 	return fi, nil
 }
 
+func exists(path string) bool {
+	_, err := os.Lstat(path)
+	return !errors.Is(err, fs.ErrNotExist)
+}
+
 // complete reports whether the database file holds all its content: no
 // rollback journal, and no WAL file with frames in it.
 func complete(abs string) bool {
-	if _, err := os.Lstat(abs + "-journal"); !errors.Is(err, fs.ErrNotExist) {
+	if exists(abs + "-journal") {
 		return false
 	}
 	fi, err := os.Lstat(abs + "-wal")
@@ -259,10 +286,18 @@ type Reads struct {
 	Columns   [][2]string // table and column pairs
 }
 
-// ExecIndexChange runs sql, which must be one CREATE INDEX or DROP INDEX
-// statement; SQLite's authorizer refuses anything else. If vet is set, it sees
-// what the statement reads before it runs, and can refuse it.
-func ExecIndexChange(c *sqlite3.Conn, sql string, vet func(Reads) error) (err error) {
+// ExecIndexChange runs sql, one CREATE INDEX or DROP INDEX, under an authorizer
+// that refuses anything else. A vet sees what it reads first, and can refuse it.
+func ExecIndexChange(c *sqlite3.Conn, sql string, vet func(Reads) error) error {
+	return indexChange(c, sql, vet, true)
+}
+
+// PrepareIndexChange checks sql as ExecIndexChange does, without running it.
+func PrepareIndexChange(c *sqlite3.Conn, sql string, vet func(Reads) error) error {
+	return indexChange(c, sql, vet, false)
+}
+
+func indexChange(c *sqlite3.Conn, sql string, vet func(Reads) error, run bool) (err error) {
 	var r Reads
 	vetting := false // vet's own queries aren't the change
 	err = c.SetAuthorizer(func(action sqlite3.AuthorizerActionCode, name3, name4, schema, _ string) sqlite3.AuthorizerReturnCode {
@@ -289,7 +324,7 @@ func ExecIndexChange(c *sqlite3.Conn, sql string, vet func(Reads) error) (err er
 				return sqlite3.AUTH_OK
 			}
 		case sqlite3.AUTH_DELETE: // DROP INDEX also removes the index's statistics
-			if schema == "main" && slices.Contains([]string{"sqlite_master", "sqlite_stat1", "sqlite_stat3", "sqlite_stat4"}, name3) {
+			if schema == "main" && slices.Contains([]string{"sqlite_master", "sqlite_stat1", "sqlite_stat2", "sqlite_stat3", "sqlite_stat4"}, name3) {
 				return sqlite3.AUTH_OK
 			}
 		}
@@ -314,6 +349,9 @@ func ExecIndexChange(c *sqlite3.Conn, sql string, vet func(Reads) error) (err er
 		if err != nil {
 			return err
 		}
+	}
+	if !run {
+		return nil
 	}
 	return st.Exec()
 }
@@ -362,7 +400,7 @@ func (s Script) Run(c *sqlite3.Conn) error {
 				continue
 			}
 			if strings.Contains(err.Error(), "too many attached databases") {
-				err = errors.New("ATTACH and VACUUM INTO aren't allowed: they could change other files")
+				err = errors.New("ATTACH and VACUUM INTO can't be used here, as they could change other files")
 			}
 			return &sqltext.Error{File: s.File, Line: s.Line + first.Line - 1, Err: err}
 		}
@@ -429,4 +467,18 @@ func Indexes(c *sqlite3.Conn) ([]index.Index, error) {
 		return nil
 	})
 	return ixs, err
+}
+
+// FreeName returns base, or base with a number added, that no schema object has.
+func FreeName(c *sqlite3.Conn, base string) (string, error) {
+	taken := make(map[string]bool)
+	err := Query(c, `SELECT name FROM sqlite_schema`, func(st *sqlite3.Stmt) error {
+		taken[sqltext.Fold(st.ColumnText(0))] = true
+		return nil
+	})
+	name := base
+	for n := 2; taken[sqltext.Fold(name)]; n++ {
+		name = fmt.Sprintf("%s_%d", base, n)
+	}
+	return name, err
 }

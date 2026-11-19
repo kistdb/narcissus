@@ -15,10 +15,7 @@
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-      # Always the latest stable Go. nixpkgs lags behind Go's point releases,
-      # so this builds the newest one from go.dev's source tarball, and builds
-      # gopls, golangci-lint and govulncheck with it. Delete the override (back
-      # to plain go_1_27) once nixpkgs ships this version or a newer one.
+      # The latest Go, built from go.dev until nixpkgs catches up; then use plain go_1_27.
       goFor =
         pkgs:
         pkgs.go_1_27.overrideAttrs (_: rec {
@@ -58,8 +55,7 @@
         }
       );
 
-      # The CLI, built without cgo. Its tests run as the check, so
-      # `nix build .#checks.aarch64-linux.test` tests it on Linux from a Mac.
+      # The CLI, without cgo. `just test-linux` runs its tests as a Linux check.
       packages = forAllSystems (pkgs: {
         default = (pkgs.buildGoModule.override { go = goFor pkgs; }) {
           pname = "narcissus";

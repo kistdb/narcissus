@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -16,19 +16,19 @@ import (
 
 // runSync runs cmd, plan or apply, over the databases in args.
 func runSync(ctx context.Context, cmd string, args []string, stdout, stderr io.Writer) error {
-	fs := newFlagSet(cmd, stderr)
-	indexes := fs.String("indexes", "indexes.sql", "the desired indexes")
-	prune := fs.Bool("prune", false, "drop non-UNIQUE indexes that the indexes file doesn't declare")
-	pruneUnique := fs.Bool("prune-unique", false, "with -prune, drop undeclared UNIQUE indexes too")
-	allowApp := fs.Bool("allow-collations-and-functions", false,
-		"create indexes that use collations other than BINARY, functions, or LIKE, GLOB, REGEXP and MATCH")
-	jobs := fs.Int("jobs", 4, "databases to handle at once")
-	busy := fs.Duration("busy-timeout", 5*time.Second, "how long to wait for a locked database")
+	flags := newFlagSet(cmd, stderr)
+	indexes := flags.String("indexes", "indexes.sql", "the `file` of desired indexes")
+	prune := flags.Bool("prune", false, "drop non-UNIQUE indexes that the indexes file doesn't declare")
+	pruneUnique := flags.Bool("prune-unique", false, "with -prune, drop undeclared UNIQUE indexes too")
+	allowApp := flags.Bool("allow-collations-and-functions", false,
+		"also build NOCASE and RTRIM, and lower(), upper() and trim() of text columns")
+	jobs := flags.Int("jobs", 4, "databases to handle at once")
+	busy := flags.Duration("busy-timeout", 5*time.Second, "how long to wait for a locked database")
 	var exitPending *bool
 	if cmd == "plan" {
-		exitPending = fs.Bool("exit-code", false, "exit with status 3 if any database needs changes")
+		exitPending = flags.Bool("exit-code", false, "exit with status 3 if any database needs changes")
 	}
-	if err := parse(fs, args, -1); err != nil {
+	if err := parse(flags, args, -1); err != nil {
 		return err
 	}
 	switch {
@@ -38,7 +38,7 @@ func runSync(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		return usageError{err: fmt.Errorf("%s: -prune-unique needs -prune", cmd)}
 	}
 
-	src, err := os.ReadFile(*indexes)
+	src, err := readIndexes(*indexes)
 	if err != nil {
 		return err
 	}
@@ -47,9 +47,9 @@ func runSync(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 		return err
 	}
 	if *prune && len(desired) == 0 {
-		return fmt.Errorf("%s declares no indexes, so -prune would drop them all; refusing", *indexes)
+		return fmt.Errorf("%s doesn't declare any indexes yet, so -prune would drop every one; nothing was changed. Add your indexes to the file, or leave out -prune", *indexes)
 	}
-	paths, skipped, err := fleet.Expand(fs.Args())
+	paths, skipped, err := fleet.Expand(flags.Args())
 	if err != nil {
 		return err
 	}
@@ -68,7 +68,7 @@ func runSync(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 	fleet.Run(ctx, paths, desired, opts, func(r fleet.Result) { s.print(stdout, r, *indexes, opts) })
 	s.printTotals(stdout, len(paths), opts.Apply)
 	switch {
-	case s.failed > 0:
+	case s.failed > 0 || s.notStarted > 0:
 		return errFailed
 	case exitPending != nil && *exitPending && s.changed > 0:
 		return errPending
@@ -77,15 +77,20 @@ func runSync(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 }
 
 // summary counts results as they're printed.
-type summary struct{ changed, inSync, failed int }
+type summary struct{ changed, inSync, failed, notStarted int }
 
 // print writes one database's changes, as they come.
 func (s *summary) print(w io.Writer, r fleet.Result, indexesFile string, opts fleet.Options) {
 	switch {
+	case errors.Is(r.Err, context.Canceled) && r.Plan.Empty() && len(r.Refused) == 0:
+		s.notStarted++
+		return
 	case r.Err != nil:
 		s.failed++
-		fmt.Fprintf(w, "%s: error: %s\n", clean(r.Path), clean(r.Err.Error()))
+		fmt.Fprintf(w, "%s: error: %s\n", clean(r.Path), message(r.Err))
 		return
+	case len(r.Refused) > 0:
+		s.failed++
 	case r.Plan.Empty():
 		s.inSync++
 	default:
@@ -104,12 +109,12 @@ func (s *summary) print(w io.Writer, r fleet.Result, indexesFile string, opts fl
 		case index.Drop:
 			fmt.Fprintf(w, "  - DROP INDEX %s\n", clean(c.Index.Name))
 		}
-		if deps := c.Index.AppDependent(); c.Action != index.Drop && len(deps) > 0 && !opts.AllowAppDependent {
-			fmt.Fprintf(w, "    ! uses %s: apply needs -allow-collations-and-functions\n", clean(strings.Join(deps, ", ")))
-		}
-		if c.Action == index.Replace && c.Old.Unique && !c.Index.Unique && opts.Prune != index.PruneAll {
-			fmt.Fprintf(w, "    ! drops a UNIQUE constraint: apply needs -prune -prune-unique\n")
-		}
+	}
+	for _, err := range r.Refused {
+		fmt.Fprintf(w, "  ! %s\n", message(err))
+	}
+	if len(r.Refused) > 0 {
+		fmt.Fprintf(w, "  Nothing was changed in this database.\n")
 	}
 	for _, ix := range r.Plan.Unmanaged {
 		how := "-prune drops it"
@@ -125,8 +130,20 @@ func (s *summary) printTotals(w io.Writer, n int, applied bool) {
 	if applied {
 		verb = "changed"
 	}
-	fmt.Fprintf(w, "%d %s: %d %s, %d in sync, %d failed.\n",
-		n, plural(n, "database", "databases"), s.changed, verb, s.inSync, s.failed)
+	fmt.Fprintf(w, "%d %s: %d %s, %d in sync, %d failed", n, plural(n, "database", "databases"), s.changed, verb, s.inSync, s.failed)
+	if s.notStarted > 0 {
+		fmt.Fprintf(w, ", %d not started (interrupted)", s.notStarted)
+	}
+	fmt.Fprintln(w, ".")
+}
+
+// message is an error as users read it: without the SQLite library's prefixes.
+func message(err error) string {
+	m := err.Error()
+	for _, p := range []string{"sqlite3: ", "SQL logic error: "} {
+		m = strings.ReplaceAll(m, p, "")
+	}
+	return clean(m)
 }
 
 // clean quotes text that holds control characters, so output can't be forged.

@@ -35,10 +35,17 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return err
 	}
 	db := flags.Arg(0)
+	if fi, err := os.Stat(*dir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("-dir %s isn't a folder", *dir)
+	}
 
-	c, err := sqlite.Open(ctx, db, sqlite.Options{BusyTimeout: sqlite.DefaultBusyTimeout})
+	dbInfo, err := os.Stat(db)
 	if err != nil {
 		return err
+	}
+	c, err := sqlite.Open(ctx, db, sqlite.Options{BusyTimeout: sqlite.DefaultBusyTimeout})
+	if err != nil {
+		return fmt.Errorf("%s: %w", db, err)
 	}
 	defer c.Close()
 	objs, err := sqlite.Schema(c)
@@ -77,6 +84,9 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	for _, f := range files {
 		path := filepath.Join(*dir, f.name)
 		fi, err := os.Lstat(path) // a dangling symlink counts as existing
+		if err == nil && os.SameFile(fi, dbInfo) {
+			return fmt.Errorf("%s is the database itself; please choose another -dir", path)
+		}
 		switch {
 		case err == nil && fi.IsDir():
 			return fmt.Errorf("%s is a folder", path)
@@ -88,7 +98,11 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		case err != nil && !errors.Is(err, fs.ErrNotExist):
 			return err
 		}
-		writes = append(writes, pendingWrite{path, f.content})
+		w := pendingWrite{path: path, content: f.content}
+		if err == nil {
+			w.mode = fi.Mode().Perm() // keep the permissions of the file -force replaces
+		}
+		writes = append(writes, w)
 	}
 	if err := writeAll(*dir, writes); err != nil {
 		return err
@@ -106,7 +120,7 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) error
 func terminate(sql string) string {
 	toks, err := sqltext.Lex(sql)
 	switch {
-	case err != nil && strings.Contains(err.Error(), "unterminated comment"):
+	case errors.Is(err, sqltext.ErrUnterminatedComment):
 		return sql + " */;\n"
 	case err == nil && len(toks) > 0 && strings.Contains(sql[toks[len(toks)-1].End:], "--"):
 		return sql + "\n;\n"
@@ -115,7 +129,10 @@ func terminate(sql string) string {
 	}
 }
 
-type pendingWrite struct{ path, content string }
+type pendingWrite struct {
+	path, content string
+	mode          fs.FileMode // zero for a new file, which gets the umask's
+}
 
 // writeAll writes every file to a temporary name in dir, then renames them
 // into place, so a failure leaves the old files untouched.
@@ -135,6 +152,9 @@ func writeAll(dir string, writes []pendingWrite) (err error) {
 		}
 		temps = append(temps, f.Name())
 		_, err = f.WriteString(w.content)
+		if w.mode != 0 {
+			err = errors.Join(err, f.Chmod(w.mode))
+		}
 		if err := errors.Join(err, f.Close()); err != nil {
 			return err
 		}

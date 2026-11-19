@@ -56,8 +56,8 @@ func TestOpenRefuses(t *testing.T) {
 		{"empty file", empty, false, "not a SQLite database"},
 		{"text file", text, false, "not a SQLite database"},
 		{"folder", dir, false, "not a SQLite database"},
-		{"hard link, write", linked, true, "2 hard links"},
-		{"hard link, read", linked, false, "2 hard links"},
+		{"hard link, write", linked, true, "2 names"},
+		{"hard link, read", linked, false, "2 names"},
 		{"long path", deep, false, "longer than"},
 	}
 	for _, tt := range tests {

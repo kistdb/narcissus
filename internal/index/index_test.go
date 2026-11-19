@@ -2,6 +2,7 @@ package index
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -173,22 +174,42 @@ func TestPruneNonUnique(t *testing.T) {
 	}
 }
 
-func TestAppDependent(t *testing.T) {
-	tests := map[string][]string{
-		"CREATE INDEX i ON t (a, b DESC)":                                   nil,
-		"CREATE INDEX i ON t (a COLLATE BINARY)":                            nil,
-		"CREATE INDEX i ON t (a) WHERE b IN (1, 2) AND CAST(c AS INT) > 0":  nil,
-		"CREATE INDEX i ON t (a COLLATE nocase)":                            {"COLLATE nocase"},
-		"CREATE INDEX i ON t (lower(email))":                                {"lower()"},
-		"CREATE INDEX i ON t (a) WHERE b LIKE 'x%' AND c = d COLLATE RTRIM": {"LIKE", "COLLATE RTRIM"},
+func TestShape(t *testing.T) {
+	ok := []string{
+		"CREATE INDEX i ON t (a, b DESC, c COLLATE NOCASE ASC)",
+		"CREATE INDEX i ON t (lower(trim(email)))",
+		"CREATE INDEX i ON t (a) WHERE deleted_at IS NULL AND n > -1",
+		"CREATE INDEX i ON t (a) WHERE status IN ('open', 'held') OR NOT (k = 5)",
+		"CREATE INDEX i ON t (a) WHERE n BETWEEN 1 AND 10 AND flag = 1 AND x NOTNULL",
+		"CREATE INDEX i ON t (a) WHERE 0 < n",
 	}
-	for sql, want := range tests {
+	refused := []string{
+		"CREATE INDEX i ON t (customer || ':' || total)",
+		"CREATE INDEX i ON t (CAST(a AS TEXT))",
+		"CREATE INDEX i ON t ((a + b))",
+		"CREATE INDEX i ON t (length(a))",
+		"CREATE INDEX i ON t (\"lower\"(a))",
+		"CREATE INDEX i ON t (data ->> '$.ref')",
+		"CREATE INDEX i ON t (a) WHERE s = 1e15",
+		"CREATE INDEX i ON t (a) WHERE n = 1.5",
+		"CREATE INDEX i ON t (a) WHERE n = 1_000",
+		"CREATE INDEX i ON t (a) WHERE s = r - 0",
+		"CREATE INDEX i ON t (a) WHERE s = +r",
+		"CREATE INDEX i ON t (a) WHERE a = b",
+		"CREATE INDEX i ON t (a) WHERE a + 0 > 1",
+		"CREATE INDEX i ON t (a) WHERE name = 'x' COLLATE NOCASE",
+		"CREATE INDEX i ON t (a) WHERE n = 1234567890123456",
+		"CREATE INDEX i ON t (a) WHERE flag IS TRUE",
+		"CREATE INDEX i ON t (a) WHERE a = FALSE",
+	}
+	for _, sql := range append(ok, refused...) {
 		ix, err := FromSQL(sql)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := ix.AppDependent(); !reflect.DeepEqual(got, want) {
-			t.Errorf("AppDependent(%q) = %q, want %q", sql, got, want)
+		_, _, err = ix.Shape()
+		if want := slices.Contains(refused, sql); (err != nil) != want {
+			t.Errorf("Shape(%q) = %v, want refused %v", sql, err, want)
 		}
 	}
 }

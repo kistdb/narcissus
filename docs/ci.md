@@ -1,6 +1,6 @@
 # Running Narcissus in CI
 
-## Check queries on every pull request
+## Checking queries on every pull request
 
 `check` needs no database, only your SQL files, so it runs anywhere.
 
@@ -14,12 +14,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version: "1.27"
+          go-version: "1.27.x"
       - run: go install github.com/kistdb/narcissus/cmd/narcissus@latest
       - run: narcissus check -format github
 ```
 
-`-format github` turns each problem into an annotation on the pull request, next to the query in `queries.sql`.
+`-format github` puts each problem on the pull request as a note beside the query in `queries.sql`.
 
 If your tables come from migrations, point `check` at the folder:
 
@@ -27,24 +27,31 @@ If your tables come from migrations, point `check` at the folder:
 narcissus check -schema db/migrations
 ```
 
-For other CI systems, use the default text output, or `-format json` for a report a script can read. `check` exits 1 when a query fails.
+On other CI systems, use the default text output, or `-format json` for a report a script can read. `check` exits with status 1 when a query fails.
 
-## Catch drift
+Once there's a release, it's a good idea to install a fixed version rather than `@latest`, so every run uses the same Narcissus.
 
-`plan -exit-code` exits 3 when a database's indexes don't match `indexes.sql`. Use it in a scheduled job that can reach your databases:
+## Catching drift
+
+`plan -exit-code` exits with status 3 when a database's indexes don't match `indexes.sql`, which suits a scheduled job that can reach your databases:
 
 ```sh
 narcissus plan -exit-code 'tenants/*.db'
 ```
 
-## Apply on deploy
+Indexes that are in a database but not in `indexes.sql` only count as drift if you add `-prune`. A database that can't be read gives status 1.
 
-`apply` changes your databases, with no warranty (see [No warranty](../README.md#no-warranty)). Back them up first, and run `plan` in the same job before it.
+## Applying on deploy
 
-Run `apply` in the deploy step, after migrations:
+`apply` is the one step that changes your databases. Please back them up first, and run `plan` earlier in the same job, so the log shows what was about to change. Narcissus comes with no warranty (see [No warranty](../README.md#no-warranty)).
+
+Run `apply` in the deploy step, after your migrations:
 
 ```sh
+narcissus plan 'data/tenants/*.db'
 narcissus apply 'data/tenants/*.db'
 ```
 
-If your indexes use `COLLATE NOCASE`, `lower()` and the like, and your app uses SQLite's built-ins, add `-allow-collations-and-functions`; see [the README](../README.md#plan-and-apply). Each database changes in its own transaction. A failed one is reported, makes the exit status 1, and doesn't stop the rest. Building an index on a large table holds SQLite's write lock while it runs, so schedule big changes for quiet times.
+- **Collations and functions:** if your indexes use `COLLATE NOCASE` or `lower()`, and your app uses SQLite's standard versions, add `-allow-collations-and-functions`. The README explains [which indexes Narcissus builds](../README.md#which-indexes-narcissus-builds).
+- **One transaction each:** each database is changed on its own. One that fails is reported and gives exit status 1, without stopping the rest.
+- **Locking:** building an index on a large table holds SQLite's write lock while it runs, so big changes are best made at a quiet time.

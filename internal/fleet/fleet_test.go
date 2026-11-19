@@ -86,13 +86,13 @@ func TestRun(t *testing.T) {
 			t.Errorf("%s indexes = %q, want %q", filepath.Base(paths[i]), got, want)
 		}
 	}
-	if results[2].Err == nil || !strings.Contains(results[2].Err.Error(), "no such table") {
-		t.Errorf("broken.db error = %v, want no such table", results[2].Err)
+	if !strings.Contains(failure(results[2]), "no such table") {
+		t.Errorf("broken.db failure = %q, want no such table", failure(results[2]))
 	}
 
 	again := Run(t.Context(), paths[:2], desired(t), Options{Apply: true, Prune: index.PruneAll}, nil)
 	for _, r := range again {
-		if r.Err != nil || !r.Plan.Empty() {
+		if failure(r) != "" || !r.Plan.Empty() {
 			t.Errorf("second apply to %s: %+v", r.Path, r)
 		}
 	}
@@ -173,7 +173,7 @@ func TestApplyInSyncSkipsWriteLock(t *testing.T) {
 	defer func() { _ = writer.Exec(`ROLLBACK`) }()
 
 	r := Run(t.Context(), []string{path}, desired(t), Options{Apply: true}, nil)[0]
-	if r.Err != nil || !r.Plan.Empty() {
+	if failure(r) != "" || !r.Plan.Empty() {
 		t.Errorf("apply to an in-sync database with a writer: %+v", r)
 	}
 }
@@ -196,8 +196,8 @@ func TestExpandSameFile(t *testing.T) {
 		t.Errorf("Expand() = %q, want the one file once", got)
 	}
 	r := Run(t.Context(), got, desired(t), Options{Apply: true}, nil)[0]
-	if r.Err == nil || !strings.Contains(r.Err.Error(), "hard links") {
-		t.Errorf("apply to a hard-linked database: %v, want a refusal", r.Err)
+	if !strings.Contains(failure(r), "hard links") {
+		t.Errorf("apply to a hard-linked database: %q, want a refusal", failure(r))
 	}
 }
 
@@ -216,15 +216,15 @@ func TestAppDependentIndexes(t *testing.T) {
 		}
 		before := indexNames(t, path)
 		r := Run(t.Context(), []string{path}, want, Options{Apply: true, Prune: index.PruneAll}, nil)[0]
-		if r.Err == nil || !strings.Contains(r.Err.Error(), "-allow-collations-and-functions") {
-			t.Errorf("%s: %v, want a refusal", sql, r.Err)
+		if !strings.Contains(failure(r), "-allow-collations-and-functions") {
+			t.Errorf("%s: %q, want a refusal", sql, failure(r))
 		}
 		if got := indexNames(t, path); !reflect.DeepEqual(got, before) {
 			t.Errorf("%s: refused change left indexes %q, want %q", sql, got, before)
 		}
 		r = Run(t.Context(), []string{path}, want, Options{Apply: true, AllowAppDependent: true, Prune: index.PruneAll}, nil)[0]
-		if r.Err != nil {
-			t.Errorf("%s with the flag: %v", sql, r.Err)
+		if failure(r) != "" {
+			t.Errorf("%s with the flag: %s", sql, failure(r))
 		}
 	}
 }
@@ -273,9 +273,9 @@ func TestAppDependentFromReads(t *testing.T) {
 			t.Fatalf("%s: %v", sql, err)
 		}
 		r := Run(t.Context(), []string{path}, want, Options{Apply: true}, nil)[0]
-		isRefused := r.Err != nil && strings.Contains(r.Err.Error(), "-allow-collations-and-functions")
+		isRefused := failure(r) != ""
 		if wantRefused := slices.Contains(refused, sql); isRefused != wantRefused {
-			t.Errorf("%s: err %v, want refused %v", sql, r.Err, wantRefused)
+			t.Errorf("%s: %q, want refused %v", sql, failure(r), wantRefused)
 		}
 	}
 }
@@ -288,7 +288,7 @@ func TestUniqueProtected(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := Run(t.Context(), []string{path}, other, Options{Apply: true, Prune: index.PruneNonUnique}, nil)[0]
-	if r.Err != nil || slices.Contains(indexNames(t, path), "u") == false {
+	if failure(r) != "" || !slices.Contains(indexNames(t, path), "u") {
 		t.Errorf("-prune dropped a UNIQUE index SQLite stored with a trailing comment: %+v", r)
 	}
 
@@ -297,11 +297,11 @@ func TestUniqueProtected(t *testing.T) {
 		t.Fatal(err)
 	}
 	r = Run(t.Context(), []string{path}, plain, Options{Apply: true, Prune: index.PruneNonUnique}, nil)[0]
-	if r.Err == nil || !strings.Contains(r.Err.Error(), "-prune-unique") {
-		t.Errorf("replacing UNIQUE u with a plain index: %v, want a refusal", r.Err)
+	if !strings.Contains(failure(r), "-prune-unique") {
+		t.Errorf("replacing UNIQUE u with a plain index: %q, want a refusal", failure(r))
 	}
-	if r = Run(t.Context(), []string{path}, plain, Options{Apply: true, Prune: index.PruneAll}, nil)[0]; r.Err != nil {
-		t.Errorf("with -prune-unique: %v", r.Err)
+	if r = Run(t.Context(), []string{path}, plain, Options{Apply: true, Prune: index.PruneAll}, nil)[0]; failure(r) != "" {
+		t.Errorf("with -prune-unique: %s", failure(r))
 	}
 }
 
@@ -310,8 +310,8 @@ func TestReplaceOnAnalyzedDatabase(t *testing.T) {
 	newDB(t, path, tables+`CREATE INDEX orders_status ON orders (status DESC); CREATE INDEX extra ON orders (id, status);
 		INSERT INTO orders (customer_id, status) VALUES (1, 'a'), (2, 'b'); ANALYZE;`)
 	r := Run(t.Context(), []string{path}, desired(t), Options{Apply: true, Prune: index.PruneNonUnique}, nil)[0]
-	if r.Err != nil {
-		t.Errorf("replace and prune on an ANALYZEd database: %v", r.Err)
+	if failure(r) != "" {
+		t.Errorf("replace and prune on an ANALYZEd database: %s", failure(r))
 	}
 }
 
@@ -332,5 +332,189 @@ func TestGlobUnreadableFolder(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dir, "b"), 0o700) })
 	if paths, _, err := Expand([]string{filepath.Join(dir, "*", "app.db")}); err == nil {
 		t.Errorf("Expand() = %q, want an error for the unreadable folder", paths)
+	}
+}
+
+// failure is a result's error and refusals, as one string.
+func failure(r Result) string {
+	var parts []string
+	if r.Err != nil {
+		parts = append(parts, r.Err.Error())
+	}
+	for _, err := range r.Refused {
+		parts = append(parts, err.Error())
+	}
+	return strings.Join(parts, "; ")
+}
+
+func TestAllowFlagStillRefusesWhatDiffers(t *testing.T) {
+	const schema = `CREATE TABLE t (a TEXT, n TEXT COLLATE NOCASE, g TEXT AS (lower(a)) VIRTUAL, h TEXT AS (a LIKE 'x%') VIRTUAL);
+		CREATE TABLE w (k TEXT COLLATE NOCASE PRIMARY KEY, v INT) WITHOUT ROWID;`
+	tests := []struct {
+		sql               string
+		withFlag, without bool // refused?
+	}{
+		{`CREATE INDEX i ON t (a) WHERE a LIKE 'ab%'`, true, true},
+		{`CREATE INDEX i ON t (a) WHERE a GLOB 'ab*'`, true, true},
+		{`CREATE INDEX i ON t (a) WHERE a REGEXP '^ab'`, true, true},
+		{`CREATE INDEX i ON t (n)`, false, true},
+		{`CREATE INDEX i ON t (lower(a))`, false, true},
+		{`CREATE INDEX i ON t (g)`, true, true},
+		{`CREATE INDEX i ON t (h)`, true, true},
+		{`CREATE INDEX i ON w (v)`, false, true},
+		{`CREATE INDEX i ON t (a)`, false, false},
+	}
+	for _, tt := range tests {
+		for _, allow := range []bool{true, false} {
+			path := filepath.Join(t.TempDir(), "a.db")
+			newDB(t, path, schema)
+			want, err := index.Parse("indexes.sql", tt.sql)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := Run(t.Context(), []string{path}, want, Options{Apply: true, AllowAppDependent: allow}, nil)[0]
+			wantRefused := tt.without
+			if allow {
+				wantRefused = tt.withFlag
+			}
+			if got := failure(r) != ""; got != wantRefused {
+				t.Errorf("%s, flag %v: %q, want refused %v", tt.sql, allow, failure(r), wantRefused)
+			}
+		}
+	}
+}
+
+func TestRefusalsReportedTogether(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "a.db")
+	newDB(t, path, `CREATE TABLE t (a, b TEXT COLLATE NOCASE)`)
+	want, err := index.Parse("indexes.sql", `CREATE INDEX ok ON t (a); CREATE INDEX nope ON t (missing); CREATE INDEX nc ON t (b);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, apply := range []bool{false, true} {
+		r := Run(t.Context(), []string{path}, want, Options{Apply: apply}, nil)[0]
+		if len(r.Refused) != 2 {
+			t.Errorf("apply %v: refused %v, want nope and nc", apply, r.Refused)
+		}
+	}
+	if got := indexNames(t, path); got != nil {
+		t.Errorf("a refused plan changed the database: %q", got)
+	}
+}
+
+func TestExpandRejectsDoubleStar(t *testing.T) {
+	if _, _, err := Expand([]string{"tenants/**/*.db"}); err == nil || !strings.Contains(err.Error(), "**") {
+		t.Errorf("Expand(**) = %v, want a refusal", err)
+	}
+}
+
+func TestStaleNamesAndVersionDrift(t *testing.T) {
+	const schema = `CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT, total REAL, x REAL, s TEXT,
+			inner_g INT AS (s LIKE 'a%') VIRTUAL, g INT AS (inner_g + 0) VIRTUAL, q INT AS ("like"('a%', s)) VIRTUAL);
+		CREATE TABLE pragma_function_list (name TEXT, builtin INT);
+		CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, archived_at TEXT);
+		CREATE UNIQUE INDEX users_email ON users (email);
+		CREATE TABLE accounts (id INTEGER PRIMARY KEY, email TEXT);`
+	tests := []struct {
+		sql               string
+		without, withFlag bool // refused?
+	}{
+		{`CREATE INDEX i ON orders (customer || ':' || total)`, true, true},
+		{`CREATE INDEX i ON orders (CAST(total AS TEXT))`, true, true},
+		{`CREATE INDEX i ON orders (length(total))`, true, true},
+		{`CREATE INDEX i ON orders (customer || ':' || s)`, true, true},
+		{`CREATE INDEX i ON orders (lower(customer))`, true, false},
+		{`CREATE INDEX i ON orders (id) WHERE customer = 1e15`, true, true},
+		{`CREATE INDEX i ON orders (id) WHERE total = '5'`, true, true},
+		{`CREATE INDEX i ON orders (id) WHERE customer = 'a' AND total > 10`, false, false},
+		{`CREATE INDEX i ON orders (lower(total))`, true, true},
+		{`CREATE INDEX i ON orders ((x + 1))`, true, true},
+		{`CREATE INDEX i ON orders (log10(x))`, true, true},
+		{`CREATE INDEX i ON orders (date(s))`, true, true},
+		{`CREATE INDEX i ON orders (g)`, true, true},
+		{`CREATE INDEX i ON orders (q)`, true, true},
+		{`CREATE INDEX i ON orders (s) WHERE s REGEXP '^a'`, true, true},
+		{`CREATE UNIQUE INDEX "i" ON "users" ("email") WHERE "deleted_at" IS NULL`, true, true},
+		{`CREATE INDEX i ON orders (customer) WHERE customer IS NOT NULL AND total > -1`, false, false},
+	}
+	for _, tt := range tests {
+		for _, allow := range []bool{false, true} {
+			path := filepath.Join(t.TempDir(), "a.db")
+			newDB(t, path, schema)
+			want, err := index.Parse("indexes.sql", tt.sql)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want = append(want, mustIndex(t, `CREATE UNIQUE INDEX users_email ON users (email)`))
+			for _, apply := range []bool{false, true} {
+				r := Run(t.Context(), []string{path}, want, Options{Apply: apply, AllowAppDependent: allow}, nil)[0]
+				wantRefused := tt.without
+				if allow {
+					wantRefused = tt.withFlag
+				}
+				if got := failure(r) != ""; got != wantRefused {
+					t.Errorf("%s, flag %v, apply %v: %q, want refused %v", tt.sql, allow, apply, failure(r), wantRefused)
+				}
+			}
+		}
+	}
+
+	// A UNIQUE index moved to another table, or changed at all, needs -prune-unique.
+	path := filepath.Join(t.TempDir(), "a.db")
+	newDB(t, path, schema)
+	moved := []index.Index{mustIndex(t, `CREATE UNIQUE INDEX users_email ON accounts (email)`)}
+	if r := Run(t.Context(), []string{path}, moved, Options{Apply: true}, nil)[0]; !strings.Contains(failure(r), "-prune-unique") {
+		t.Errorf("moving a UNIQUE index: %q, want a refusal", failure(r))
+	}
+}
+
+func mustIndex(t *testing.T, sql string) index.Index {
+	t.Helper()
+	ixs, err := index.Parse("indexes.sql", sql)
+	if err != nil || len(ixs) != 1 {
+		t.Fatalf("Parse(%q) = %v, %v", sql, ixs, err)
+	}
+	return ixs[0]
+}
+
+func TestDataDependentRefusals(t *testing.T) {
+	tests := []struct {
+		name, setup, sql string
+		refused          bool
+	}{
+		{"nul text in a number column", `CREATE TABLE t (id INTEGER PRIMARY KEY, x INTEGER, b TEXT); INSERT INTO t VALUES (1, 'abc', 'x'), (2, 7, 'y');`,
+			`CREATE UNIQUE INDEX ix ON t (b) WHERE x > 5`, true},
+		{"numbers only", `CREATE TABLE t (id INTEGER PRIMARY KEY, x INTEGER, b TEXT); INSERT INTO t VALUES (1, 5, 'x'), (2, 7, 'y');`,
+			`CREATE UNIQUE INDEX ix ON t (b) WHERE x > 5`, false},
+		{"extreme default", `CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT); INSERT INTO t VALUES (1, 'x'); ALTER TABLE t ADD COLUMN eps REAL DEFAULT 1e-300;`,
+			`CREATE UNIQUE INDEX ix ON t (eps, a)`, true},
+		{"text default on a number column", `CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT); ALTER TABLE t ADD COLUMN n NUMERIC DEFAULT '-1.1637124187458781e-153';`,
+			`CREATE INDEX ix ON t (n)`, true},
+		{"everyday defaults", `CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT DEFAULT 'none', r REAL DEFAULT 0.0, n INT DEFAULT -1);`,
+			`CREATE INDEX ix ON t (a, r, n)`, false},
+		{"utf-16 text literal", `PRAGMA encoding = 'UTF-16le'; CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT, b TEXT);`,
+			`CREATE UNIQUE INDEX ix ON t (b) WHERE a = 'x'`, true},
+		{"utf-16 plain column", `PRAGMA encoding = 'UTF-16le'; CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT, b TEXT);`,
+			`CREATE INDEX ix ON t (a, b) WHERE b IS NOT NULL`, false},
+		{"column named true", `CREATE TABLE t (id INTEGER PRIMARY KEY, a TEXT, b TEXT, "true" REAL);`,
+			`CREATE UNIQUE INDEX ix ON t (b) WHERE a = TRUE`, true},
+	}
+	for _, tt := range tests {
+		path := filepath.Join(t.TempDir(), "a.db")
+		newDB(t, path, tt.setup)
+		want, err := index.Parse("indexes.sql", tt.sql)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := Run(t.Context(), []string{path}, want, Options{Apply: true, AllowAppDependent: true}, nil)[0]
+		if got := failure(r) != ""; got != tt.refused {
+			t.Errorf("%s: %q, want refused %v", tt.name, failure(r), tt.refused)
+		}
+	}
+	// lower() in a UTF-16 database, even with the flag.
+	path := filepath.Join(t.TempDir(), "a.db")
+	newDB(t, path, `PRAGMA encoding = 'UTF-16le'; CREATE TABLE t (a TEXT);`)
+	if r := Run(t.Context(), []string{path}, []index.Index{mustIndex(t, `CREATE INDEX ix ON t (lower(a))`)}, Options{Apply: true, AllowAppDependent: true}, nil)[0]; failure(r) == "" {
+		t.Error("lower() in a UTF-16 database was built")
 	}
 }

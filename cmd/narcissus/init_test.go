@@ -159,3 +159,37 @@ func TestInitStoredOddities(t *testing.T) {
 		t.Error("init replaced schema.sql before failing")
 	}
 }
+
+func TestInitDirAndPermissions(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "app.db")
+	newDB(t, db, "CREATE TABLE t (a);")
+	err := run(t.Context(), []string{"init", "-dir", filepath.Join(dir, "nope"), db}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "isn't a folder") {
+		t.Errorf("init -dir missing: %v", err)
+	}
+	schema := filepath.Join(dir, "schema.sql")
+	if err := os.WriteFile(schema, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(t.Context(), []string{"init", "-dir", dir, "-force", db}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(schema); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("schema.sql after -force: %v %v, want 0600 kept", fi.Mode().Perm(), err)
+	}
+}
+
+func TestInitWontOverwriteItsDatabase(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "schema.sql")
+	newDB(t, db, "CREATE TABLE t (a); INSERT INTO t VALUES (1);")
+	before, _ := os.ReadFile(db)
+	err := run(t.Context(), []string{"init", "-dir", dir, "-force", db}, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "the database itself") {
+		t.Errorf("init -force over its own database: %v", err)
+	}
+	if after, _ := os.ReadFile(db); !bytes.Equal(before, after) {
+		t.Error("init changed the database")
+	}
+}

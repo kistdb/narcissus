@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/ncruces/go-sqlite3"
@@ -46,12 +47,22 @@ func Build(ctx context.Context, schemaPath, indexesPath string) (_ *DB, err erro
 			c.Close()
 		}
 	}()
-	isDB, err := loadSchema(ctx, c, schemaPath)
+	var unbuilt []string
+	isDB, err := loadSchema(ctx, c, schemaPath, &unbuilt)
 	if err != nil {
 		return nil, err
 	}
 	d := &DB{Conn: c, Indexes: desired}
 	if d.Ignored, err = dropIndexes(c, desired); err != nil {
+		return nil, err
+	}
+	for _, name := range unbuilt {
+		if !slices.ContainsFunc(desired, func(ix index.Index) bool { return sqltext.Fold(ix.Name) == sqltext.Fold(name) }) {
+			d.Ignored = append(d.Ignored, name)
+		}
+	}
+	// Indexes are built as apply builds them: "x" must name a column.
+	if err := sqlite.AllowDoubleQuotedStrings(c, false); err != nil {
 		return nil, err
 	}
 	if err := (sqlite.Script{File: indexesPath, Line: 1, Text: string(src)}).Run(c); err != nil {
@@ -62,11 +73,15 @@ func Build(ctx context.Context, schemaPath, indexesPath string) (_ *DB, err erro
 			return nil, fmt.Errorf("%s: copy statistics: %w", schemaPath, err)
 		}
 	}
+	// Queries are run as the app's SQLite would, with its defaults.
+	if err := sqlite.AllowDoubleQuotedStrings(c, true); err != nil {
+		return nil, err
+	}
 	return d, nil
 }
 
 // loadSchema runs the schema at path into c, reporting whether it came from a database file.
-func loadSchema(ctx context.Context, c *sqlite3.Conn, path string) (isDB bool, err error) {
+func loadSchema(ctx context.Context, c *sqlite3.Conn, path string, unbuilt *[]string) (isDB bool, err error) {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return false, err
@@ -91,7 +106,7 @@ func loadSchema(ctx context.Context, c *sqlite3.Conn, path string) (isDB bool, e
 		return false, err
 	}
 	if isDB {
-		return true, loadDatabase(ctx, c, path)
+		return true, loadDatabase(ctx, c, path, unbuilt)
 	}
 	text, err := os.ReadFile(path)
 	if err != nil {
@@ -101,26 +116,29 @@ func loadSchema(ctx context.Context, c *sqlite3.Conn, path string) (isDB bool, e
 }
 
 // loadDatabase copies the schema, indexes included, of the database at path into c.
-func loadDatabase(ctx context.Context, c *sqlite3.Conn, path string) error {
+func loadDatabase(ctx context.Context, c *sqlite3.Conn, path string, unbuilt *[]string) error {
 	src, err := sqlite.Open(ctx, path, sqlite.Options{BusyTimeout: sqlite.DefaultBusyTimeout})
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", path, err)
 	}
 	defer src.Close()
 	objs, err := sqlite.Schema(src)
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
+	for _, o := range objs {
+		if err := c.Exec(o.SQL); err != nil {
+			return fmt.Errorf("%s: %s %s: %w", path, o.Type, o.Name, err)
+		}
+	}
 	ixs, err := sqlite.Indexes(src)
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 	for _, ix := range ixs {
-		objs = append(objs, sqlite.Object{Type: "index", Name: ix.Name, SQL: ix.SQL})
-	}
-	for _, o := range objs {
-		if err := c.Exec(o.SQL); err != nil {
-			return fmt.Errorf("%s: %s %s: %w", path, o.Type, o.Name, err)
+		// One the scratch database can't build, as with an app's own collation, is left out.
+		if c.Exec(ix.SQL) != nil {
+			*unbuilt = append(*unbuilt, ix.Name)
 		}
 	}
 	return nil
@@ -152,7 +170,7 @@ func dropIndexes(c *sqlite3.Conn, desired []index.Index) ([]string, error) {
 func copyStats(ctx context.Context, c *sqlite3.Conn, path string) error {
 	src, err := sqlite.Open(ctx, path, sqlite.Options{BusyTimeout: sqlite.DefaultBusyTimeout})
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", path, err)
 	}
 	defer src.Close()
 	// ANALYZE creates the statistics tables, which can't be created directly.

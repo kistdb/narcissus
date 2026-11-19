@@ -25,7 +25,7 @@ func main() {
 
 // exitCode returns the exit status for run's error, printing it if needed.
 func exitCode(err error, stderr io.Writer) int {
-	var usage usageError
+	usage, isUsage := errors.AsType[usageError](err)
 	switch {
 	case err == nil, errors.Is(err, flag.ErrHelp):
 		return 0
@@ -33,7 +33,7 @@ func exitCode(err error, stderr io.Writer) int {
 		return 1 // already reported
 	case errors.Is(err, errPending):
 		return 3
-	case errors.As(err, &usage):
+	case isUsage:
 		if !usage.printed {
 			fmt.Fprintln(stderr, "narcissus:", err)
 		}

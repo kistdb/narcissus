@@ -207,7 +207,7 @@ func TestBuildCantTouchFiles(t *testing.T) {
 		if err == nil {
 			d.Close()
 		}
-		if err == nil || !strings.Contains(err.Error(), "aren't allowed") {
+		if err == nil || !strings.Contains(err.Error(), "can't be used here") {
 			t.Errorf("%s: Build() = %v, want a refusal", name, err)
 		}
 	}
@@ -216,5 +216,49 @@ func TestBuildCantTouchFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(newFile); err == nil {
 		t.Error("VACUUM INTO created a file")
+	}
+}
+
+func TestMigrationLayouts(t *testing.T) {
+	dir := t.TempDir()
+	mig := filepath.Join(dir, "migrations")
+	for _, d := range []string{"", "20240101_init", "20240202_orders"} {
+		if err := os.MkdirAll(filepath.Join(mig, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, filepath.Join(mig, "20240101_init"), "migration.sql", "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);")
+	write(t, filepath.Join(mig, "20240202_orders"), "migration.sql", "CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INT);")
+	write(t, mig, "20240303_note.sql", "-- +migrate Up\nALTER TABLE orders ADD COLUMN note TEXT;\n-- +migrate Down\nDROP TABLE orders;\n")
+	d, err := Build(t.Context(), mig, write(t, dir, "indexes.sql", indexesSQL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+}
+
+func TestDatabaseIndexesItCantBuild(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.db")
+	c, err := sqlite3.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CreateCollation("app_order", func(a, b []byte) int { return bytes.Compare(a, b) }); err != nil {
+		t.Fatal(err)
+	}
+	err = c.Exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT); CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INT);
+		CREATE INDEX users_app ON users (email COLLATE app_order);`)
+	c.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := Build(t.Context(), path, write(t, dir, "indexes.sql", indexesSQL))
+	if err != nil {
+		t.Fatalf("Build() = %v, want the unbuildable index left out", err)
+	}
+	defer d.Close()
+	if !slices.Contains(d.Ignored, "users_app") {
+		t.Errorf("Ignored = %q, want users_app", d.Ignored)
 	}
 }

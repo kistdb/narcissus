@@ -1,6 +1,7 @@
 package check
 
 import (
+	"regexp"
 	"slices"
 	"strings"
 
@@ -13,8 +14,7 @@ import (
 // target is a query with what's needed to read its plans.
 type target struct {
 	Query
-	tables  map[string]bool   // ordinary tables, case-folded
-	aliases map[string]string // the query's aliases for tables, case-folded
+	aliases map[string]string // alias to name, from the query and the views it may use
 }
 
 // explain returns the steps of the query's plan.
@@ -42,7 +42,7 @@ func (t target) analyze(steps []string) (ps []Problem, indexScans int) {
 		var r Rule
 		name, viaIndex, scan := scanned(s)
 		switch {
-		case scan && !subqueries[name] && t.isTable(name):
+		case scan && t.isTable(name, subqueries):
 			if viaIndex {
 				indexScans++
 				continue
@@ -64,22 +64,36 @@ func (t target) analyze(steps []string) (ps []Problem, indexScans int) {
 
 func (t target) allows(r Rule) bool { return slices.Contains(t.Allow, r) }
 
-// isTable reports whether name, as a plan step gives it, is an ordinary table or an alias for one.
-func (t target) isTable(name string) bool {
-	if table, ok := t.aliases[name]; ok {
-		name = table
+var valuesClause = regexp.MustCompile(`^\d+-row values clause$`)
+
+// isTable reports whether a scanned name is a table: anything but a subquery,
+// CTE or VALUES list, directly or through an alias.
+func (t target) isTable(name string, subqueries map[string]bool) bool {
+	if subqueries[name] || name == "constant row" || valuesClause.MatchString(name) {
+		return false
 	}
-	return t.tables[name]
+	if target, ok := t.aliases[name]; ok && subqueries[target] {
+		return false
+	}
+	return true
 }
 
-// scanned parses a "SCAN name [USING ...]" step, returning the case-folded name.
+// scanned parses a "SCAN name [USING ...]" step, returning the case-folded
+// name. Virtual tables and table-valued functions aren't scans of a table.
 func scanned(step string) (name string, viaIndex, ok bool) {
 	rest, ok := strings.CutPrefix(step, "SCAN ")
-	if !ok {
+	if !ok || strings.Contains(rest, " VIRTUAL TABLE") {
 		return "", false, false
 	}
-	name, using, viaIndex := strings.Cut(rest, " USING ")
-	return sqltext.Fold(name), viaIndex && strings.Contains(using, "INDEX"), true
+	rest, using, viaIndex := strings.Cut(rest, " USING ")
+	for _, suffix := range []string{" LEFT-JOIN", " RIGHT-JOIN", " EXISTS"} {
+		rest = strings.TrimSuffix(rest, suffix)
+	}
+	name = sqltext.Fold(rest)
+	for _, schema := range []string{"main.", "temp."} {
+		name = strings.TrimPrefix(name, schema)
+	}
+	return name, viaIndex && strings.Contains(using, "INDEX"), true
 }
 
 // usesIndex reports whether a plan step uses the named index.
@@ -99,19 +113,9 @@ func usesIndex(step, name string) bool {
 	return false
 }
 
-// tableNames returns the database's ordinary tables, case-folded.
-func tableNames(c *sqlite3.Conn) (map[string]bool, error) {
-	tables := make(map[string]bool)
-	err := sqlite.Query(c, `SELECT name FROM pragma_table_list WHERE schema = 'main' AND type = 'table'`, func(st *sqlite3.Stmt) error {
-		tables[sqltext.Fold(st.ColumnText(0))] = true
-		return nil
-	})
-	return tables, err
-}
-
-// aliases maps the aliases a query gives tables, as in "orders o" or
-// "orders AS o", to the tables. It's lexical, so it may hold extra names.
-func aliases(sql string, tables map[string]bool) map[string]string {
+// aliases maps the aliases in sql, as in "orders o" or "orders AS o", to
+// what they name. It's lexical, so it may hold harmless extra names.
+func aliases(sql string) map[string]string {
 	toks, err := sqltext.Lex(sql)
 	if err != nil {
 		return nil
@@ -121,8 +125,7 @@ func aliases(sql string, tables map[string]bool) map[string]string {
 	}
 	m := make(map[string]string)
 	for i, tok := range toks {
-		table := sqltext.Fold(tok.Ident())
-		if !isName(tok) || !tables[table] {
+		if !isName(tok) {
 			continue
 		}
 		j := i + 1
@@ -130,8 +133,18 @@ func aliases(sql string, tables map[string]bool) map[string]string {
 			j++
 		}
 		if j < len(toks) && isName(toks[j]) {
-			m[sqltext.Fold(toks[j].Ident())] = table
+			m[sqltext.Fold(toks[j].Ident())] = sqltext.Fold(tok.Ident())
 		}
 	}
 	return m
+}
+
+// viewSQL returns the definitions of the database's views, joined.
+func viewSQL(c *sqlite3.Conn) (string, error) {
+	var b strings.Builder
+	err := sqlite.Query(c, `SELECT sql FROM sqlite_schema WHERE type = 'view'`, func(st *sqlite3.Stmt) error {
+		b.WriteString(st.ColumnText(0) + ";\n")
+		return nil
+	})
+	return b.String(), err
 }

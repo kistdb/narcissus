@@ -14,7 +14,8 @@ func TestRun(t *testing.T) {
 		wantOut  string
 		wantCode int
 	}{
-		{"version", []string{"version"}, "devel\n", 0},
+		{"version", []string{"version"}, "narcissus devel (SQLite 3.", 0},
+		{"--version", []string{"--version"}, "narcissus devel", 0},
 		{"help", []string{"help"}, "Usage:", 0},
 		{"no command", nil, "", 2},
 		{"unknown command", []string{"sync"}, "", 2},

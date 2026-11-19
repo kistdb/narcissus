@@ -7,8 +7,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ncruces/go-sqlite3"
+
 	"github.com/kistdb/narcissus/internal/index"
 	"github.com/kistdb/narcissus/internal/scratch"
+	"github.com/kistdb/narcissus/internal/sqlite"
 	"github.com/kistdb/narcissus/internal/sqltext"
 )
 
@@ -91,11 +94,11 @@ func (q *Query) directives(comments []string) error {
 			continue
 		}
 		value = strings.TrimSpace(value)
-		switch strings.TrimSpace(key) {
+		switch strings.ToLower(strings.TrimSpace(key)) {
 		case "name":
 			q.Name = value
 		case "narcissus":
-			allow, ok := strings.CutPrefix(value, "allow ")
+			allow, ok := strings.CutPrefix(strings.ToLower(value), "allow ")
 			if !ok {
 				return fmt.Errorf("unknown directive %q (want allow)", value)
 			}
@@ -113,7 +116,7 @@ func (q *Query) directives(comments []string) error {
 
 // Run checks each query's plan against the scratch database.
 func Run(db *scratch.DB, queries []Query) (*Report, error) {
-	tables, err := tableNames(db.Conn)
+	views, err := viewSQL(db.Conn)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +124,7 @@ func Run(db *scratch.DB, queries []Query) (*Report, error) {
 	var allSteps []string
 	for _, q := range queries {
 		res := Result{Query: q}
-		t := target{Query: q, tables: tables, aliases: aliases(q.SQL, tables)}
+		t := target{Query: q, aliases: aliases(q.SQL + ";\n" + views)}
 		steps, err := explain(db.Conn, q.SQL)
 		if err != nil {
 			res.Err = err
@@ -139,10 +142,40 @@ func Run(db *scratch.DB, queries []Query) (*Report, error) {
 	}
 	if len(queries) > 0 {
 		for _, ix := range db.Indexes {
-			if !ix.Unique && !slices.ContainsFunc(allSteps, func(s string) bool { return usesIndex(s, ix.Name) }) {
+			if ix.Unique || ix.AllowUnused || slices.ContainsFunc(allSteps, func(s string) bool { return usesIndex(s, ix.Name) }) {
+				continue
+			}
+			fk, err := backsForeignKey(db.Conn, ix)
+			if err != nil {
+				return nil, err
+			}
+			if !fk {
 				rep.Unused = append(rep.Unused, ix)
 			}
 		}
 	}
 	return rep, nil
+}
+
+// backsForeignKey reports whether the index's leading columns are a foreign
+// key's, so it serves lookups that query plans don't show.
+func backsForeignKey(c *sqlite3.Conn, ix index.Index) (bool, error) {
+	var cols []string
+	err := sqlite.Query(c, `SELECT name FROM pragma_index_info(`+sqltext.QuoteString(ix.Name)+`) ORDER BY seqno`,
+		func(st *sqlite3.Stmt) error { cols = append(cols, sqltext.Fold(st.ColumnText(0))); return nil })
+	if err != nil {
+		return false, err
+	}
+	fks := make(map[int][]string)
+	err = sqlite.Query(c, `SELECT id, "from" FROM pragma_foreign_key_list(`+sqltext.QuoteString(ix.Table)+`) ORDER BY id, seq`,
+		func(st *sqlite3.Stmt) error {
+			fks[st.ColumnInt(0)] = append(fks[st.ColumnInt(0)], sqltext.Fold(st.ColumnText(1)))
+			return nil
+		})
+	for _, from := range fks {
+		if len(from) <= len(cols) && slices.Equal(cols[:len(from)], from) {
+			return true, err
+		}
+	}
+	return false, err
 }

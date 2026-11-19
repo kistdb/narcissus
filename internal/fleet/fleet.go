@@ -31,9 +31,10 @@ type Options struct {
 
 // Result is the outcome for one database.
 type Result struct {
-	Path string
-	Plan index.Plan
-	Err  error
+	Path    string
+	Plan    index.Plan
+	Refused []error // changes that would be refused; then none were made
+	Err     error
 }
 
 // Expand returns the database files args name, each once however many paths
@@ -56,6 +57,9 @@ func Expand(args []string) (paths, skipped []string, err error) {
 			}
 			add(arg, fi)
 			continue
+		}
+		if strings.Contains(arg, "**") {
+			return nil, nil, fmt.Errorf("%s: ** isn't supported; give each folder level, as in 'tenants/*/*.db'", arg)
 		}
 		matches, err := glob(arg)
 		if err != nil {
@@ -162,7 +166,7 @@ func Run(ctx context.Context, paths []string, desired []index.Index, opts Option
 			}
 			wg.Go(func() {
 				defer func() { <-sem; close(done[i]) }()
-				results[i].Plan, results[i].Err = one(ctx, path, desired, opts)
+				results[i].Plan, results[i].Refused, results[i].Err = one(ctx, path, desired, opts)
 			})
 		}
 	})
@@ -176,40 +180,84 @@ func Run(ctx context.Context, paths []string, desired []index.Index, opts Option
 	return results
 }
 
-// one plans, and maybe applies, the changes for the database at path. It
-// takes the write lock only when there is something to change.
-func one(ctx context.Context, path string, desired []index.Index, opts Options) (_ index.Plan, err error) {
+// one plans, and maybe applies, a database's changes. If any change would be
+// refused, none is made; the write lock is taken only to change something.
+func one(ctx context.Context, path string, desired []index.Index, opts Options) (_ index.Plan, refused []error, err error) {
 	c, err := sqlite.Open(ctx, path, sqlite.Options{Write: opts.Apply, BusyTimeout: opts.BusyTimeout})
 	if err != nil {
-		return index.Plan{}, err
+		return index.Plan{}, nil, err
 	}
 	defer func() { err = errors.Join(err, c.Close()) }()
+	v, err := newVetter(c, opts.AllowAppDependent)
+	if err != nil {
+		return index.Plan{}, nil, err
+	}
 	plan, err := diff(c, desired, opts.Prune)
-	if err != nil || !opts.Apply || plan.Empty() {
-		return plan, err
+	if err != nil || plan.Empty() {
+		return plan, nil, err
+	}
+	if refused = check(c, v, plan, opts.Prune); len(refused) > 0 || !opts.Apply {
+		return plan, refused, nil
 	}
 
 	var tx sqlite3.Txn
 	if tx, err = c.BeginImmediate(); err != nil {
-		return index.Plan{}, err
+		return index.Plan{}, nil, err
 	}
 	defer tx.End(&err)
 	if plan, err = diff(c, desired, opts.Prune); err != nil { // again, under the lock
-		return index.Plan{}, err
+		return index.Plan{}, nil, err
 	}
 	for _, ch := range plan.Changes {
-		if err := change(c, ch, opts); err != nil {
-			return index.Plan{}, fmt.Errorf("%s: %w", ch.Index.Name, err)
+		if err := change(c, v, ch, opts.Prune); err != nil {
+			return index.Plan{}, nil, fmt.Errorf("%s: %w", ch.Index.Name, err)
 		}
 	}
-	return plan, nil
+	return plan, nil, nil
 }
 
-// change makes one change. It refuses to drop a UNIQUE index's constraint
-// without PruneAll, or to build an index that depends on the app unless allowed.
-func change(c *sqlite3.Conn, ch index.Change, opts Options) error {
-	if ch.Action == index.Replace && ch.Old.Unique && !ch.Index.Unique && opts.Prune != index.PruneAll {
-		return errors.New("replacing a UNIQUE index with one that isn't drops its constraint; pass -prune -prune-unique to allow it")
+// check prepares every change without making it, and returns why any would be refused.
+func check(c *sqlite3.Conn, v *vetter, plan index.Plan, prune index.Prune) []error {
+	var refused []error
+	for _, ch := range plan.Changes {
+		if err := uniqueGuard(ch, prune); err != nil {
+			refused = append(refused, err)
+			continue
+		}
+		if ch.Action == index.Drop {
+			continue
+		}
+		sql := ch.Index.SQL
+		if ch.Action == index.Replace { // the old index still holds the name
+			name, err := sqlite.FreeName(c, "narcissus_check_"+ch.Index.Name)
+			if err == nil {
+				sql, err = ch.Index.Renamed(name)
+			}
+			if err != nil {
+				refused = append(refused, err)
+				continue
+			}
+		}
+		if err := sqlite.PrepareIndexChange(c, sql, func(r sqlite.Reads) error { return v.vet(ch.Index, r) }); err != nil {
+			refused = append(refused, fmt.Errorf("%s: %w", ch.Index.Name, err))
+		}
+	}
+	return refused
+}
+
+// uniqueGuard asks for -prune-unique before a UNIQUE index is replaced, since
+// any change to one can loosen the rule it enforces.
+func uniqueGuard(ch index.Change, prune index.Prune) error {
+	if ch.Action == index.Replace && ch.Old.Unique && prune != index.PruneAll {
+		return fmt.Errorf("%s: replacing a UNIQUE index can loosen the rule it enforces; run with -prune -prune-unique if that's intended", ch.Index.Name)
+	}
+	return nil
+}
+
+// change makes one change, vetting a new index before and after it's built.
+func change(c *sqlite3.Conn, v *vetter, ch index.Change, prune index.Prune) error {
+	if err := uniqueGuard(ch, prune); err != nil {
+		return err
 	}
 	if ch.Action != index.Create {
 		if err := sqlite.ExecIndexChange(c, `DROP INDEX `+sqltext.Quote(ch.Index.Name), nil); err != nil {
@@ -219,49 +267,10 @@ func change(c *sqlite3.Conn, ch index.Change, opts Options) error {
 	if ch.Action == index.Drop {
 		return nil
 	}
-	var vet func(sqlite.Reads) error
-	if !opts.AllowAppDependent {
-		vet = func(r sqlite.Reads) error { return vetAppDependent(c, ch.Index, r) }
+	if err := sqlite.ExecIndexChange(c, ch.Index.SQL, func(r sqlite.Reads) error { return v.vet(ch.Index, r) }); err != nil {
+		return err
 	}
-	return sqlite.ExecIndexChange(c, ch.Index.SQL, vet)
-}
-
-// vetAppDependent refuses an index whose content depends on how the app
-// defines collations or functions: SQLite's reads show every function, operator and column.
-func vetAppDependent(c *sqlite3.Conn, ix index.Index, r sqlite.Reads) error {
-	var deps []string
-	for _, d := range ix.AppDependent() {
-		if strings.HasPrefix(d, "COLLATE ") {
-			deps = append(deps, d)
-		}
-	}
-	for _, f := range r.Functions {
-		deps = append(deps, f+"()")
-	}
-	for _, tc := range r.Columns {
-		_, coll, _, _, _, err := c.TableColumnMetadata("main", tc[0], tc[1])
-		if err != nil {
-			return fmt.Errorf("column %s.%s: %w", tc[0], tc[1], err)
-		}
-		if !strings.EqualFold(coll, "BINARY") {
-			deps = append(deps, fmt.Sprintf("column %s with COLLATE %s", tc[1], coll))
-		}
-		virtual := false
-		err = sqlite.Query(c, `SELECT 1 FROM pragma_table_xinfo(`+sqltext.QuoteString(tc[0])+`) WHERE name = `+sqltext.QuoteString(tc[1])+` AND hidden = 2`,
-			func(*sqlite3.Stmt) error { virtual = true; return nil })
-		if err != nil {
-			return err
-		}
-		if virtual {
-			deps = append(deps, fmt.Sprintf("generated column %s", tc[1]))
-		}
-	}
-	if len(deps) == 0 {
-		return nil
-	}
-	slices.Sort(deps)
-	return fmt.Errorf("uses %s, which an app can define differently, leaving it a corrupt index; "+
-		"pass -allow-collations-and-functions if your app uses SQLite's built-ins", strings.Join(slices.Compact(deps), ", "))
+	return v.built(ch.Index)
 }
 
 func diff(c *sqlite3.Conn, desired []index.Index, prune index.Prune) (index.Plan, error) {
