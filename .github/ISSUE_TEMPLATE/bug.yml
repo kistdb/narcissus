@@ -1,0 +1,36 @@
+name: Bug report
+description: Something isn't working as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting this. If it could put people's data at risk, please [report it privately](https://github.com/kistdb/narcissus/security/advisories/new) instead.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `narcissus version`.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 15, Ubuntu 24.04, Windows 11…
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: What you ran
+      description: The command, and the SQL or a small database that shows the problem. Please leave out anything private.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true

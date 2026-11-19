@@ -46,6 +46,8 @@ Docs and messages are written in British English: clear, concise and friendly, h
 
 ## Commits and pull requests
 
+For anything bigger than a small fix, please open an issue first, so we can agree the approach before you spend time on it. Reviews happen when time allows, so please bear with us.
+
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/): `feat: ...`, `fix: ...`, `docs: ...`.
 - For anything a user would notice, add a line under "Unreleased" in [CHANGELOG.md](CHANGELOG.md).
 - Pull requests are squash-merged.
