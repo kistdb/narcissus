@@ -1,0 +1,11 @@
+name: Question
+description: A question about using Narcissus.
+labels: [question]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What you're trying to do, and what you've tried. The [README](https://github.com/kistdb/narcissus#readme) and [docs](https://github.com/kistdb/narcissus/tree/main/docs) may already have the answer.
+    validations:
+      required: true
