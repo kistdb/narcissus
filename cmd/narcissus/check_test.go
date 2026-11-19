@@ -114,7 +114,7 @@ func TestCheckErrors(t *testing.T) {
 	}{
 		{"bad format", checkArgs(dir, "-format", "xml"), `unknown format "xml"`, 2},
 		{"extra argument", append(checkArgs(dir), "app.db"), "doesn't take a database", 2},
-		{"missing queries", []string{"check", "-schema", filepath.Join(dir, "schema.sql"), "-indexes", filepath.Join(dir, "indexes.sql"), "-queries", filepath.Join(dir, "nope.sql")}, "no such file", 1},
+		{"missing queries", []string{"check", "-schema", filepath.Join(dir, "schema.sql"), "-indexes", filepath.Join(dir, "indexes.sql"), "-queries", filepath.Join(dir, "nope.sql")}, "nope.sql", 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

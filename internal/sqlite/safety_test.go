@@ -3,6 +3,7 @@ package sqlite
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -81,6 +82,9 @@ func TestOpenRefuses(t *testing.T) {
 }
 
 func TestOpenFileNamedLikeURI(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows file names can't contain a colon")
+	}
 	dir := t.TempDir()
 	t.Chdir(dir)
 	newDB(t, "t.db", `CREATE TABLE plain (a)`)
@@ -156,10 +160,13 @@ func TestImmutableOnlyWhenComplete(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(snapshot, 0o700) })
 
+	// Refusing is right, and so is reading the WAL (where chmod can't make a folder read-only, as on Windows).
 	c, err := Open(t.Context(), filepath.Join(snapshot, "app.db"), Options{})
 	if err == nil {
-		c.Close()
-		t.Error("Open() read a snapshot as immutable although its WAL holds changes")
+		defer c.Close()
+		if ixs, err := Indexes(c); err != nil || len(ixs) != 1 {
+			t.Errorf("Open() read a stale snapshot: Indexes() = %+v, %v; want t_a from the WAL", ixs, err)
+		}
 	}
 }
 

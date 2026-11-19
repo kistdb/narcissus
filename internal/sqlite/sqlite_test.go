@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -128,6 +129,9 @@ func TestScriptRunInterrupted(t *testing.T) {
 }
 
 func TestOpenWALInReadOnlyFolder(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod can't make a Windows folder read-only")
+	}
 	dir := filepath.Join(t.TempDir(), "snap shots?")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
