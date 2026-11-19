@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests databases changed by narcissus against the SQLite versions supported
-# operating systems ship (README, "Supported SQLite versions"), each playing the app.
+# operating systems ship (docs/safety.md, "Supported SQLite versions"), each playing the app.
 set -euo pipefail
 
 VERSIONS="2018:3260000 2021:3340100 2022:3370200 2022:3400100 2024:3450100 2024:3460100"
