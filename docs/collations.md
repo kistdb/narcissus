@@ -15,8 +15,8 @@ narcissus collations app.db
 ```
 app.db
   table people, column name: LOCALIZED
-  index people_city, key city: LOCALIZED
   view sorted: LOCALIZED
+  index people_city, key city: LOCALIZED
 Other SQLite programs can't compare or sort by collations they don't have. narcissus convert can write a copy that uses built-in ones.
 ```
 
@@ -35,7 +35,7 @@ narcissus convert -to nocase -write app.db app-converted.db   # writes app-conve
 
 `convert` always starts with a dry run. Nothing is written unless you add `-write`.
 
-- **Choosing collations:** `-to` sets the built-in collation (`binary`, `nocase` or `rtrim`) for every other one. `-map` names them one by one, as in `-map LOCALIZED=nocase,UNICODE=binary`; `-map` wins where both apply.
+- **Choosing collations:** `-to` sets the built-in collation (`binary`, `nocase` or `rtrim`) for every other one. `-map` names them one by one, as in `-map LOCALIZED=nocase,UNICODE=binary`; `-map` wins where both apply. There's no default, so please give at least one of them.
 - **Rows that would become equal:** if a UNIQUE index or primary key holds values that are different now but would be equal under the new collation, such as `'Zoe'` and `'zoe'` moving to `NOCASE`, Narcissus lists them and doesn't convert. Please resolve those rows first, then run it again.
 - **Foreign keys:** in the same way, if a row wouldn't match its parent row under the new collation, Narcissus says how many and doesn't convert. Without the app's collation it can't tell whether a row already had no parent, so those count too.
 - **What changes in meaning:** the dry run says how the new collation compares text. For example, `NOCASE` ignores the case of A to Z only, so `'é'` and `'É'` stay different. Add `-queries queries.sql` to see which of your queries read the columns concerned.

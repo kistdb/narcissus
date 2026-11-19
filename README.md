@@ -14,6 +14,7 @@ $ narcissus check
 queries.sql:5: recent_orders: full-scan: SCAN orders
 queries.sql:5: recent_orders: temp-btree: USE TEMP B-TREE FOR ORDER BY
   suggest: CREATE INDEX orders_customer_id_created_at ON orders (customer_id, created_at);
+indexes.sql:2: warning: index orders_total is not used by any query
 4 queries checked, 1 failed.
 ```
 
@@ -26,7 +27,7 @@ queries.sql:5: recent_orders: temp-btree: USE TEMP B-TREE FOR ORDER BY
 
 ## Install
 
-Download `narcissus` for Linux, macOS or Windows from the [releases page](https://github.com/kistdb/narcissus/releases/latest) and put it on your `PATH`. Or, with Go 1.27 or later:
+Download `narcissus` for Linux, macOS or Windows from the [releases page](https://github.com/kistdb/narcissus/releases/latest) and put it on your `PATH` (on macOS, see [the note on first run](docs/getting-started.md#on-macos)). Or, with Go 1.27 or later:
 
 ```sh
 go install github.com/kistdb/narcissus/cmd/narcissus@latest

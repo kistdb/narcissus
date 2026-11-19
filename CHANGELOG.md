@@ -4,6 +4,11 @@ All notable changes to Narcissus are listed here. The format follows [Keep a Cha
 
 ## Unreleased
 
+### Changed
+
+- Docs: how to run a macOS download that Gatekeeper stops on first run; `convert` needs `-to` or `-map`, as there's no default; sample outputs match what Narcissus prints.
+- The usage text shows that `collations` takes flags.
+
 ## 0.1.0 - 2026-11-19
 
 The first public release.
