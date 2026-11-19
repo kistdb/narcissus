@@ -19,8 +19,11 @@ All notable changes to Narcissus are listed here. The format follows [Keep a Cha
 
 - `apply` only ever creates and drops indexes, one statement at a time, and SQLite itself is set to refuse anything else.
 - Every change is checked before any is made, and `plan` runs the same checks. If any change in a database would be refused, nothing in it is changed.
-- Each database is changed in one transaction, so a failure or Ctrl-C leaves it as it was.
-- `apply` builds only indexes every SQLite computes the same way: columns, and a WHERE comparing columns with whole numbers, text or `NULL`; with `-allow-collations-and-functions`, also `NOCASE`, `RTRIM`, `lower()`, `upper()` and `trim()` of text columns. Anything else is declined with a note to create it from the app. Numeric columns holding text, unusual column defaults and UTF-16 text conversions are declined as well.
+- Each database is changed in one transaction, so a failure, Ctrl-C, a closed terminal or a closed pipe leaves it as it was.
+- Text columns holding decimal numbers, and column defaults of more than 15 digits, are declined where they'd be converted. Databases in SQLite's checksum format are declined.
+- `init` lists existing indexes Narcissus wouldn't build itself.
+- Supported app SQLite: the versions shipped by operating systems with free, regular support, from RHEL 8's 3.26; each release is tested against them. `RTRIM` isn't built, as it sorts differently before 3.29.
+- `apply` builds only indexes every SQLite computes the same way: columns, and a WHERE comparing columns with whole numbers, text or `NULL`; with `-allow-collations-and-functions`, also `NOCASE`, `lower()`, `upper()` and `trim()` of text columns. Anything else is declined with a note to create it from the app. Numeric columns holding text, unusual column defaults and UTF-16 text conversions are declined as well.
 - A double-quoted name in `indexes.sql` must be a real column; it's never read as text.
 - `-prune` keeps UNIQUE indexes unless `-prune-unique` is given, which replacing a UNIQUE index also needs, and won't run when `indexes.sql` is empty.
 - Narcissus opens only regular SQLite files with a single name, checks it still has the same file after SQLite opens it, and never creates a database. Journal and WAL files take the database's permissions. `check` can't write to any file, and `init` won't overwrite the database it reads.

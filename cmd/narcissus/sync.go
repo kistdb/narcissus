@@ -21,7 +21,7 @@ func runSync(ctx context.Context, cmd string, args []string, stdout, stderr io.W
 	prune := flags.Bool("prune", false, "drop non-UNIQUE indexes that the indexes file doesn't declare")
 	pruneUnique := flags.Bool("prune-unique", false, "with -prune, drop undeclared UNIQUE indexes too")
 	allowApp := flags.Bool("allow-collations-and-functions", false,
-		"also build NOCASE and RTRIM, and lower(), upper() and trim() of text columns")
+		"also build NOCASE, and lower(), upper() and trim() of text columns")
 	jobs := flags.Int("jobs", 4, "databases to handle at once")
 	busy := flags.Duration("busy-timeout", 5*time.Second, "how long to wait for a locked database")
 	var exitPending *bool

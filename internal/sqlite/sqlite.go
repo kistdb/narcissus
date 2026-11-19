@@ -252,15 +252,18 @@ func checkFile(path string) (fs.FileInfo, error) {
 	if !fi.Mode().IsRegular() {
 		return nil, errNotDatabase
 	}
-	header := make([]byte, 16)
+	header := make([]byte, 100)
 	if _, err := io.ReadFull(f, header); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			return nil, errNotDatabase
 		}
 		return nil, err
 	}
-	if string(header) != "SQLite format 3\x00" {
+	if string(header[:16]) != "SQLite format 3\x00" {
 		return nil, errNotDatabase
+	}
+	if header[20] == 8 { // the library would treat it as checksummed, and write WAL frames wrongly
+		return nil, errors.New("it reserves 8 bytes per page, as SQLite's checksum format does, which Narcissus doesn't support yet")
 	}
 	return fi, nil
 }

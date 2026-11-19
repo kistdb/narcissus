@@ -18,7 +18,7 @@ import (
 // SQLite computes the same way, since the app's SQLite may differ from ours.
 type vetter struct {
 	c     *sqlite3.Conn
-	allow bool // NOCASE, RTRIM and lower(), upper() and trim() of text columns
+	allow bool // NOCASE, and lower(), upper() and trim() of text columns
 	utf8  bool // text conversions differ between versions in UTF-16 databases
 }
 
@@ -41,7 +41,7 @@ type findings struct {
 func (f *findings) collation(v *vetter, name, where string) {
 	switch n := sqltext.Fold(name); {
 	case n == "binary":
-	case n != "nocase" && n != "rtrim":
+	case n != "nocase": // RTRIM sorts differently before 3.29 (RHEL 8 ships 3.26)
 		f.never = append(f.never, "COLLATE "+name+where)
 	case !v.allow:
 		f.needFlag = append(f.needFlag, "COLLATE "+name+where)
@@ -75,6 +75,8 @@ func (v *vetter) vet(ix index.Index, r sqlite.Reads) error {
 		}
 		if !text {
 			f.never = append(f.never, k.Describe()+" on a column that isn't text")
+		} else if err := v.realInText(&f, ix.Table, k.Column); err != nil {
+			return err
 		}
 	}
 	for _, c := range conds {
@@ -86,6 +88,8 @@ func (v *vetter) vet(ix index.Index, r sqlite.Reads) error {
 			}
 			if !text {
 				f.never = append(f.never, "text compared with "+c.Column+", which isn't a text column")
+			} else if err := v.realInText(&f, ix.Table, c.Column); err != nil {
+				return err
 			}
 			if !v.utf8 {
 				f.never = append(f.never, "text compared with "+c.Column+" in a UTF-16 database")
@@ -136,7 +140,7 @@ func (v *vetter) column(f *findings, table, col string) error {
 }
 
 // plainDefault matches defaults every SQLite reads the same way: NULL, text,
-// and numbers of at most 15 digits without an exponent.
+// and numbers of at most 15 digits in all, without an exponent.
 var plainDefault = regexp.MustCompile(`^(NULL|'[^']*'|-?[0-9]{1,15}|-?[0-9]+\.[0-9]+)$`)
 
 // columnDefault declines a column whose default isn't a plain value: rows from
@@ -158,7 +162,7 @@ func (v *vetter) columnDefault(f *findings, table, col string) error {
 	if err != nil {
 		return err
 	}
-	digits := len(strings.Trim(strings.NewReplacer("-", "", ".", "").Replace(d), "0"))
+	digits := len(strings.NewReplacer("-", "", ".", "").Replace(d))
 	if !plainDefault.MatchString(strings.ToUpper(d)) || !strings.HasPrefix(d, "'") && digits > 15 ||
 		strings.HasPrefix(d, "'") && !text && !v.untyped(table, col) {
 		f.never = append(f.never, "column "+col+" with the default "+d)
@@ -187,6 +191,18 @@ func (v *vetter) integerCompare(f *findings, table, col string) error {
 		func(*sqlite3.Stmt) error { found = true; return nil })
 	if found {
 		f.never = append(f.never, "a number compared with "+col+", which holds text in some rows")
+	}
+	return err
+}
+
+// realInText declines a text column that holds decimal numbers in some rows:
+// turned into text, they get different digits in different SQLite versions.
+func (v *vetter) realInText(f *findings, table, col string) error {
+	found := false
+	err := sqlite.Query(v.c, `SELECT 1 FROM `+sqltext.Quote(table)+` WHERE typeof(`+sqltext.Quote(col)+`) = 'real' LIMIT 1`,
+		func(*sqlite3.Stmt) error { found = true; return nil })
+	if found {
+		f.never = append(f.never, "text column "+col+", which holds decimal numbers in some rows")
 	}
 	return err
 }
@@ -255,4 +271,27 @@ func dedupe(s []string) []string {
 		}
 	}
 	return out
+}
+
+// Refusals returns why apply would decline to build each index on c, as it stands.
+func Refusals(c *sqlite3.Conn, ixs []index.Index) ([]error, error) {
+	v, err := newVetter(c, false)
+	if err != nil {
+		return nil, err
+	}
+	var refused []error
+	for _, ix := range ixs {
+		name, err := sqlite.FreeName(c, "narcissus_check_"+ix.Name)
+		if err != nil {
+			return nil, err
+		}
+		sql, err := ix.Renamed(name) // the index itself still holds its name
+		if err == nil {
+			err = sqlite.PrepareIndexChange(c, sql, func(r sqlite.Reads) error { return v.vet(ix, r) })
+		}
+		if err != nil {
+			refused = append(refused, fmt.Errorf("%s: %w", ix.Name, err))
+		}
+	}
+	return refused, nil
 }

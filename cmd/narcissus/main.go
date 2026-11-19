@@ -10,17 +10,34 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"syscall"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
 var version = ""
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	err := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	ctx, stop := signal.NotifyContext(context.Background(), stopSignals...)
+	ctx, cancel := context.WithCancel(ctx)
+	ignoreBrokenPipe()
+	err := run(ctx, os.Args[1:], &cancelOnError{w: os.Stdout, cancel: cancel}, os.Stderr)
+	cancel()
 	stop()
 	os.Exit(exitCode(err, os.Stderr))
+}
+
+// cancelOnError stops the run once output can't be written, as when piped to head,
+// so work in progress is rolled back rather than cut off.
+type cancelOnError struct {
+	w      io.Writer
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnError) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	if err != nil {
+		c.cancel()
+	}
+	return n, err
 }
 
 // exitCode returns the exit status for run's error, printing it if needed.

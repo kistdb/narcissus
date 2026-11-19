@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/kistdb/narcissus/internal/fleet"
 	"github.com/kistdb/narcissus/internal/index"
 	"github.com/kistdb/narcissus/internal/sqlite"
 	"github.com/kistdb/narcissus/internal/sqltext"
@@ -112,6 +113,16 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	}
 	fmt.Fprintf(stdout, "%d tables, views and triggers; %d %s. Next: add your queries to queries.sql and run narcissus check.\n",
 		len(objs), len(ixs), plural(len(ixs), "index", "indexes"))
+	refused, err := fleet.Refusals(c, ixs)
+	if err != nil || len(refused) == 0 {
+		return err
+	}
+	fmt.Fprintf(stdout, "\nNarcissus wouldn't build %d of these itself. They're in indexes.sql and are fine while they exist,\n"+
+		"but if one ever needs creating again, apply will decline it and change nothing in that database.\n"+
+		"It's best to create these from your app:\n", len(refused))
+	for _, e := range refused {
+		fmt.Fprintf(stdout, "  ! %s\n", message(e))
+	}
 	return nil
 }
 

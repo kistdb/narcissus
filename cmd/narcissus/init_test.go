@@ -193,3 +193,16 @@ func TestInitWontOverwriteItsDatabase(t *testing.T) {
 		t.Error("init changed the database")
 	}
 }
+
+func TestInitNotesIndexesApplyWontBuild(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "app.db")
+	newDB(t, db, `CREATE TABLE t (a TEXT, j TEXT); CREATE INDEX t_a ON t (a); CREATE INDEX t_j ON t (json_extract(j, '$.x'));`)
+	var out bytes.Buffer
+	if err := run(t.Context(), []string{"init", "-dir", dir, db}, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "wouldn't build 1 of these") || !strings.Contains(out.String(), "! t_j:") {
+		t.Errorf("init output:\n%s", out.String())
+	}
+}

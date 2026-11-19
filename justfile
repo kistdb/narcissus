@@ -35,3 +35,8 @@ build:
 # Run the tests on Linux, through a Nix builder for aarch64-linux.
 test-linux:
     nix build .#checks.aarch64-linux.test --no-link -L
+
+# Test changed databases against the SQLite versions supported operating
+# systems ship, built from sqlite.org's sources (needs a C compiler).
+test-compat:
+    scripts/compat.sh

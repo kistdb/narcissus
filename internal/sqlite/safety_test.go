@@ -217,3 +217,19 @@ func TestOpenHugeBusyTimeout(t *testing.T) {
 	}
 	c.Close()
 }
+
+func TestOpenRefusesChecksumFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.db")
+	newDB(t, path, `CREATE TABLE t (a)`)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b[20] = 8 // reserved bytes per page
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(t.Context(), path, Options{Write: true}); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Errorf("Open() = %v, want a refusal", err)
+	}
+}

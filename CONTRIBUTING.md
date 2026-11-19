@@ -13,6 +13,7 @@ just lint        # lint and formatting checks
 just fmt         # format the code
 just ci          # everything CI checks: lint, tests, vulnerability and secret scans, build
 just test-linux  # the tests on Linux, through a Nix builder for aarch64-linux
+just test-compat # changed databases checked by older SQLite versions, built from sqlite.org
 ```
 
 Please run `just ci` before opening a pull request. GitHub Actions also runs the tests on Linux, macOS and Windows for every pull request.

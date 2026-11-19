@@ -518,3 +518,52 @@ func TestDataDependentRefusals(t *testing.T) {
 		t.Error("lower() in a UTF-16 database was built")
 	}
 }
+
+func TestEdgeDataRefusals(t *testing.T) {
+	tests := []struct {
+		name, setup, sql string
+		refused          bool
+	}{
+		{"zero-padded default", `CREATE TABLE t (id INTEGER PRIMARY KEY); ALTER TABLE t ADD COLUMN c REAL DEFAULT 0.` + strings.Repeat("0", 86) + `192410956683361;`,
+			`CREATE INDEX ix ON t (c)`, true},
+		{"short default", `CREATE TABLE t (id INTEGER PRIMARY KEY); ALTER TABLE t ADD COLUMN c REAL DEFAULT 0.25;`,
+			`CREATE INDEX ix ON t (c)`, false},
+	}
+	for _, tt := range tests {
+		path := filepath.Join(t.TempDir(), "a.db")
+		newDB(t, path, tt.setup)
+		r := Run(t.Context(), []string{path}, []index.Index{mustIndex(t, tt.sql)}, Options{Apply: true, AllowAppDependent: true}, nil)[0]
+		if got := failure(r) != ""; got != tt.refused {
+			t.Errorf("%s: %q, want refused %v", tt.name, failure(r), tt.refused)
+		}
+	}
+
+	// A TEXT column that holds a decimal number.
+	path := filepath.Join(t.TempDir(), "a.db")
+	newDB(t, path, `CREATE TABLE u (c TEXT); INSERT INTO u VALUES ('a');`)
+	c, err := sqlite3.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Writable schema lets a REAL into the TEXT column, as an old type change might.
+	err = c.Exec(`PRAGMA writable_schema = ON; UPDATE sqlite_schema SET sql = 'CREATE TABLE u (c REAL)' WHERE name = 'u';`)
+	c.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err = sqlite3.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.Exec(`INSERT INTO u VALUES (0.1 + 0.2); PRAGMA writable_schema = ON; UPDATE sqlite_schema SET sql = 'CREATE TABLE u (c TEXT)' WHERE name = 'u';`)
+	c.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sql := range []string{`CREATE INDEX ix ON u (lower(c))`, `CREATE INDEX ix ON u (c) WHERE c = '0.3'`} {
+		r := Run(t.Context(), []string{path}, []index.Index{mustIndex(t, sql)}, Options{Apply: true, AllowAppDependent: true}, nil)[0]
+		if !strings.Contains(failure(r), "holds decimal numbers") {
+			t.Errorf("%s: %q, want a refusal", sql, failure(r))
+		}
+	}
+}
