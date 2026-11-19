@@ -18,6 +18,19 @@ go install github.com/kistdb/narcissus/cmd/narcissus@latest
 
 Go puts the binary in `$(go env GOPATH)/bin`. If `narcissus version` isn't found, add that folder to your `PATH`.
 
+### On macOS
+
+The macOS downloads aren't notarised by Apple yet, so when one comes from a web browser, macOS stops it on first run with "Apple could not verify 'narcissus' is free of malware". To run it, either:
+
+- open **System Settings → Privacy & Security** and choose **Open Anyway**; or
+- clear the download mark in Terminal, from the folder you unpacked:
+
+  ```sh
+  xattr -d com.apple.quarantine narcissus
+  ```
+
+Downloading with `curl` or `gh release download`, or installing with `go install`, avoids the message altogether. On Windows, opening it from File Explorer can show a similar SmartScreen warning; choose **More info**, then **Run anyway**.
+
 ## Your first check
 
 1. **Write the starting files from a database you already have:**

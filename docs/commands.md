@@ -70,10 +70,10 @@ narcissus init [-dir .] [-force] DB
 
 ```
 narcissus collations [-format text|json] DB...
-narcissus convert [-to nocase] [-map NAME=collation,...] [-queries queries.sql] [-write] DB NEW
+narcissus convert -to COLLATION [-map NAME=COLLATION,...] [-queries queries.sql] [-write] DB NEW
 ```
 
-A database whose app used its own collation, such as Android's `LOCALIZED`, can't be sorted or compared by other SQLite programs. `collations` lists those collations, and `convert` writes a copy that uses SQLite's built-in ones. It's a dry run unless you add `-write`, and it never changes the original. See [Collations other programs don't have](collations.md).
+A database whose app used its own collation, such as Android's `LOCALIZED`, can't be sorted or compared by other SQLite programs. `collations` lists those collations, and `convert` writes a copy that uses SQLite's built-in ones. `-to` (`binary`, `nocase` or `rtrim`) replaces every other collation, and `-map` names them one by one; there's no default, so please give at least one. It's a dry run unless you add `-write`, and it never changes the original. See [Collations other programs don't have](collations.md).
 
 ## version
 

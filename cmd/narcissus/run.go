@@ -17,7 +17,7 @@ const usageText = `Usage:
   narcissus plan  [flags] DB...    show the index changes each database needs
   narcissus apply [flags] DB...    make those changes
   narcissus init  [flags] DB       write schema.sql, indexes.sql and a starter queries.sql
-  narcissus collations DB...       list collations other SQLite programs don't have
+  narcissus collations [flags] DB... list collations other SQLite programs don't have
   narcissus convert [flags] DB NEW show, then with -write make, a copy using built-in collations
   narcissus version                print the version
 
