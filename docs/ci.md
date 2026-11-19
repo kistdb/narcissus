@@ -52,6 +52,6 @@ narcissus plan 'data/tenants/*.db'
 narcissus apply 'data/tenants/*.db'
 ```
 
-- **Collations and functions:** if your indexes use `COLLATE NOCASE` or `lower()`, and your app uses SQLite's standard versions, add `-allow-collations-and-functions`. The README explains [which indexes Narcissus builds](../README.md#which-indexes-narcissus-builds).
+- **Collations and functions:** if your indexes use `COLLATE NOCASE` or `lower()`, and your app uses SQLite's standard versions, add `-allow-collations-and-functions`. [Keeping your databases safe](safety.md#which-indexes-narcissus-builds) explains which indexes Narcissus builds.
 - **One transaction each:** each database is changed on its own. One that fails is reported and gives exit status 1, without stopping the rest.
 - **Locking:** building an index on a large table holds SQLite's write lock while it runs, so big changes are best made at a quiet time.
