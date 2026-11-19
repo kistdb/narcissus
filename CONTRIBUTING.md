@@ -18,6 +18,10 @@ just test-compat # changed databases checked by older SQLite versions, built fro
 
 Please run `just ci` before opening a pull request. GitHub Actions also runs the tests on Linux, macOS and Windows for every pull request.
 
+## Releases
+
+Versions follow [Semantic Versioning](https://semver.org/). To release, move the "Unreleased" notes in [CHANGELOG.md](CHANGELOG.md) under the new version, merge that, then push a signed tag such as `v0.1.0`. The release workflow tests, builds for Linux, macOS and Windows, and publishes the files with checksums and build provenance.
+
 ## Code
 
 - Plain, idiomatic and correct Go is preferred to clever Go.

@@ -1,5 +1,10 @@
 # Narcissus
 
+[![tests](https://github.com/kistdb/narcissus/actions/workflows/test.yml/badge.svg)](https://github.com/kistdb/narcissus/actions/workflows/test.yml)
+[![release](https://img.shields.io/github/v/release/kistdb/narcissus)](https://github.com/kistdb/narcissus/releases/latest)
+[![Go](https://img.shields.io/github/go-mod/go-version/kistdb/narcissus)](go.mod)
+[![licence](https://img.shields.io/badge/licence-MIT%20OR%20Apache--2.0-blue)](#licence)
+
 **Index checks and index sync for SQLite.**
 
 Narcissus helps you catch slow SQLite queries before they ship. It reads the plan SQLite makes for each of your queries, lets you know when one would read a whole table or sort without an index, and suggests the index that would help. When you're happy, it applies your indexes to one database or to thousands.
@@ -20,15 +25,22 @@ indexes.sql:2: warning: index orders_total is not used by any query
 
 > **Before you start:** `apply` is the only command that changes your databases, and it only ever creates and drops indexes, never your tables or rows. Even so, please keep backups and run `plan` first. Narcissus comes with no warranty: see [No warranty](#no-warranty).
 
-**Status:** early and not yet released. It's tested on macOS and Linux; Windows builds, and will be tested automatically once the repository is public. Ready-made downloads for Linux, macOS and Windows will follow.
+**Status:** early (version 0.1), so commands and output may still change. Tested on Linux, macOS and Windows.
 
 ## Install
 
-You'll need Go 1.27 or later:
+**Download a release.** The [releases page](https://github.com/kistdb/narcissus/releases/latest) has a ready-made `narcissus` for Linux, macOS and Windows, on Intel and Arm. Unpack it somewhere on your `PATH`, then:
+
+```sh
+narcissus version
+```
+
+Each release lists SHA-256 checksums in `checksums.txt`, and GitHub keeps a signed record of how each file was built, which you can check with `gh attestation verify narcissus_0.1.0_linux_amd64.tar.gz --repo kistdb/narcissus`.
+
+**Or build it with Go** 1.27 or later:
 
 ```sh
 go install github.com/kistdb/narcissus/cmd/narcissus@latest
-narcissus version
 ```
 
 Go puts the binary in `$(go env GOPATH)/bin`. If `narcissus version` isn't found, add that folder to your `PATH`.
@@ -229,7 +241,7 @@ There's a short guide to [running Narcissus in CI](docs/ci.md). For GitHub Actio
 - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
   with:
     go-version: "1.27.x"
-- run: go install github.com/kistdb/narcissus/cmd/narcissus@latest
+- run: go install github.com/kistdb/narcissus/cmd/narcissus@v0.1.0
 - run: narcissus check -format github
 ```
 
@@ -255,7 +267,7 @@ Narcissus is provided "as is", without warranty of any kind, express or implied,
 
 ## Contributing
 
-Contributions are very welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+Contributions are very welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Changes are listed in [CHANGELOG.md](CHANGELOG.md). If you find a problem that could put people's data at risk, please report it privately, as [SECURITY.md](SECURITY.md) describes.
 
 ## Licence
 

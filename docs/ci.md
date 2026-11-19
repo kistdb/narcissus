@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.27.x"
-      - run: go install github.com/kistdb/narcissus/cmd/narcissus@latest
+      - run: go install github.com/kistdb/narcissus/cmd/narcissus@v0.1.0
       - run: narcissus check -format github
 ```
 
@@ -29,7 +29,7 @@ narcissus check -schema db/migrations
 
 On other CI systems, use the default text output, or `-format json` for a report a script can read. `check` exits with status 1 when a query fails.
 
-Once there's a release, it's a good idea to install a fixed version rather than `@latest`, so every run uses the same Narcissus.
+Installing a fixed version, as above, means every run uses the same Narcissus; move it on when you're ready for a new release.
 
 ## Catching drift
 

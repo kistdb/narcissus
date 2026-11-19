@@ -4,6 +4,10 @@ All notable changes to Narcissus are listed here. The format follows [Keep a Cha
 
 ## Unreleased
 
+## 0.1.0 - 2026-11-19
+
+The first public release.
+
 ### Added
 
 - `check` finds queries whose plans read a table without an index, sort in a temporary structure or build a temporary index, and suggests indexes that would help, including a pair of indexes for joins. Output as text, GitHub annotations or JSON.
