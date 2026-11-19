@@ -141,7 +141,7 @@ func TestBuildErrors(t *testing.T) {
 	tests := []struct {
 		name, schema, indexes, wantErr string
 	}{
-		{"missing indexes file", schema, filepath.Join(dir, "nope.sql"), "no such file"},
+		{"missing indexes file", schema, filepath.Join(dir, "nope.sql"), "nope.sql"},
 		{"not an index", schema, write(t, dir, "bad.sql", "DROP TABLE users;"), "bad.sql:1: want only CREATE INDEX"},
 		{"unknown table", schema, write(t, dir, "orders.sql", "\nCREATE INDEX o ON orders (x);"), "orders.sql:2: "},
 		{"bad schema", write(t, dir, "broken.sql", "CREATE TABLE ("), write(t, dir, "ok.sql", ""), "broken.sql:1: "},

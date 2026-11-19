@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -319,7 +320,7 @@ func TestConvertExact(t *testing.T) {
 			t.Errorf("%s = %q, want %q", q, got, want)
 		}
 	}
-	if info, err := os.Stat(out); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(out); runtime.GOOS != "windows" && (err != nil || info.Mode().Perm() != 0o600) { // Windows has no such modes
 		t.Errorf("out's mode = %v, %v; want 0600", info.Mode(), err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -175,7 +176,7 @@ func TestInitDirAndPermissions(t *testing.T) {
 	if err := run(t.Context(), []string{"init", "-dir", dir, "-force", db}, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if fi, err := os.Stat(schema); err != nil || fi.Mode().Perm() != 0o600 {
+	if fi, err := os.Stat(schema); runtime.GOOS != "windows" && (err != nil || fi.Mode().Perm() != 0o600) { // Windows has no such modes
 		t.Errorf("schema.sql after -force: %v %v, want 0600 kept", fi.Mode().Perm(), err)
 	}
 }
